@@ -1,7 +1,7 @@
 import google.generativeai as genai
 
 # --- PASTE YOUR KEY BELOW ---
-TEST_API_KEY = "AIzaSyBhGG_xuXT_2aYNgiEycKszUCJ-VY6e56Y" 
+TEST_API_KEY = "...." 
 
 def list_available_models():
     print(f"🔍 Testing Key: {TEST_API_KEY[:10]}...")
