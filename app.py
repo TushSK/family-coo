@@ -1,6 +1,9 @@
 import streamlit as st
 from PIL import Image
 import json
+import requests
+from geopy.geocoders import Nominatim
+import pandas as pd
 from src.brain import get_coo_response
 from src.gcal import add_event_to_calendar, list_upcoming_events
 from src.utils import load_memory, save_feedback
@@ -9,37 +12,63 @@ from src.utils import load_memory, save_feedback
 st.set_page_config(
     page_title="Family COO", 
     page_icon="🏡", 
-    layout="wide", # Uses more screen space on mobile
-    initial_sidebar_state="collapsed" # Starts clean
+    layout="wide", 
+    initial_sidebar_state="collapsed"
 )
 
-# --- CUSTOM CSS (THE MAGIC SAUCE) ---
-# This forces the camera to be big and styles the sidebar
+# --- HELPER: AUTO-LOCATE ---
+@st.cache_data(ttl=3600) # Cache for 1 hour so we don't spam requests
+def get_auto_location():
+    try:
+        # Get City from IP Address (Free, no key needed)
+        ip_data = requests.get('https://ipinfo.io/json').json()
+        city = ip_data.get('city', 'Tampa')
+        region = ip_data.get('region', 'FL')
+        return f"{city}, {region}"
+    except:
+        return "Tampa, FL"
+
+# --- HELPER: GET MAP COORDINATES ---
+@st.cache_data
+def get_lat_lon(location_name):
+    try:
+        geolocator = Nominatim(user_agent="family_coo_app")
+        loc = geolocator.geocode(location_name)
+        if loc:
+            return pd.DataFrame({'lat': [loc.latitude], 'lon': [loc.longitude]})
+    except:
+        return None
+    return None
+
+# --- CUSTOM CSS (MOBILE OPTIMIZED) ---
 st.markdown("""
     <style>
-    /* 1. Make Camera & Buttons Full Width */
-    .stButton>button {width: 100%; border-radius: 12px; height: 3em; font-weight: 600;}
+    /* Full Width Camera & Buttons */
+    .stButton>button {width: 100%; border-radius: 12px; height: 3.5em; font-weight: 600;}
     div[data-testid="stCameraInput"] video {width: 100% !important; border-radius: 12px;}
     
-    /* 2. Clean up Sidebar */
+    /* Sleek Sidebar */
     [data-testid="stSidebar"] {background-color: #f8f9fa;}
-    .sidebar-user {padding: 10px; border-bottom: 1px solid #ddd; margin-bottom: 20px;}
-    
-    /* 3. Hide Streamlit Branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+    .user-card {
+        background-color: white; 
+        padding: 15px; 
+        border-radius: 10px; 
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    .user-name {font-weight: bold; font-size: 1.1em; margin: 0;}
+    .user-handle {color: #888; font-size: 0.9em; margin: 0;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- AUTHENTICATION CHECK ---
+# --- AUTHENTICATION ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
     st.title("🏡 Family COO")
     st.caption("Secure Login")
-    
-    # Simple PIN Check (Matches your Secrets)
     pin = st.text_input("Enter Access PIN", type="password")
     if st.button("Unlock"):
         if pin == st.secrets["general"]["app_password"]:
@@ -50,81 +79,85 @@ if not st.session_state.authenticated:
     st.stop()
 
 # --- MAIN APP ---
-
-# 1. Get Keys
 API_KEY = st.secrets["general"]["gemini_api_key"]
 
-# --- SIDEBAR: THE "PRO" MENU ---
+# --- SIDEBAR: THE "REAL APP" FEEL ---
 with st.sidebar:
-    # PROFILE HEADER
+    # 1. Profile Card
     st.markdown("""
-    <div class="sidebar-user">
-        <h3>👤 Tushar Khandare</h3>
-        <p style="color:gray; font-size:0.9em;">tushar.khandare@gmail.com</p>
+    <div class="user-card">
+        <div style="font-size: 2em;">👤</div>
+        <p class="user-name">Tushar Khandare</p>
+        <p class="user-handle">Family Administrator</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # MENU SECTIONS
-    with st.expander("🎨 Personalization", expanded=True):
-        current_loc = st.text_input("📍 Current Base", value="Tampa, FL")
-        mem_count = len(load_memory())
-        st.caption(f"🧠 Brain Memory: {mem_count} items")
-        if st.button("Clear Memory", help="Wipes AI learning"):
-            # Logic to clear memory file could go here
-            st.toast("Memory Wiped")
+    # 2. Personalization & Map
+    with st.expander("🌍 Location Base", expanded=True):
+        # Auto-detect default if session is empty
+        default_loc = get_auto_location()
+        current_loc = st.text_input("Current City", value=default_loc)
+        
+        # Live Map
+        coords = get_lat_lon(current_loc)
+        if coords is not None:
+            st.map(coords, zoom=12, size=50, height=150)
+        else:
+            st.caption("Map unavailable for this location.")
 
+    # 3. Settings
     with st.expander("⚙️ Settings"):
-        st.info("📅 Calendar: Connected")
-        st.checkbox("Debug Mode", value=False, key="debug_mode")
+        mem_count = len(load_memory())
+        st.write(f"**Brain Memory:** {mem_count} items")
+        if st.button("🧹 Clear Memory"):
+            st.toast("Memory Wiped")
+        st.divider()
+        st.caption("📅 Calendar: Connected")
 
+    # 4. Help
     with st.expander("ℹ️ Help"):
-        st.markdown("""
-        **Quick Tips:**
-        - **Plan:** "Plan a trip to [Place]"
-        - **Check:** "Am I free Saturday?"
-        - **Upload:** Photos of flyers works best.
-        """)
+        st.markdown("Use the **Camera** tab to snap flyers. Use **Type** for quick questions.")
 
-    st.divider()
-    if st.button("🚪 Log Out"):
+    # 5. Logout (Pushed to bottom)
+    st.write("") 
+    st.write("")
+    if st.button("🚪 Log Out", type="secondary"):
         st.session_state.authenticated = False
         st.rerun()
 
-# --- MAIN INTERFACE (MOBILE OPTIMIZED) ---
+# --- MAIN INTERFACE ---
 st.title("The Family COO")
 
-# TABS: Use icons for cleaner mobile look
 tab_req, tab_cam = st.tabs(["📝 Type Request", "📸 Camera"])
 
 img_context = None
 user_input = ""
 
 with tab_req:
-    user_input = st.text_area("Mission Brief", placeholder="Ex: Is Saturday free for the Beach?", height=120)
-    upl = st.file_uploader("Upload Image", type=['jpg','png'], label_visibility="collapsed")
+    user_input = st.text_area("Mission Brief", placeholder="Ex: Find a Thai temple near me...", height=100)
+    upl = st.file_uploader("Upload", type=['jpg','png'], label_visibility="collapsed")
     if upl: img_context = Image.open(upl)
 
 with tab_cam:
-    st.info("💡 Tip: Hold phone steady. Photo auto-uploads.")
-    # The 'key' ensures it doesn't reload weirdly
+    st.caption("Point at any flyer, schedule, or invite.")
     cam = st.camera_input("Snap Photo", label_visibility="collapsed") 
     if cam: 
         img_context = Image.open(cam)
-        st.success("✅ Photo Captured")
+        st.success("✅ Image Captured")
 
-# --- ACTION AREA ---
+# --- EXECUTION ---
 st.divider()
 
 if st.button("🚀 EXECUTE PLAN", type="primary"):
-    with st.spinner("🧠 Thinking..."):
-        # 1. Gather Context
+    with st.spinner(f"🧠 Scanning {current_loc} & Checking Calendar..."):
+        # 1. Context
         memory = load_memory(limit=5)
         cal_data = list_upcoming_events()
         
-        # 2. AI Processing
+        # 2. AI
         raw_response = get_coo_response(API_KEY, user_input, memory, cal_data, current_loc, img_context)
         
-        # 3. Parse JSON vs Text
+        # 3. Parsing
         if "|||JSON_START|||" in raw_response:
             parts = raw_response.split("|||JSON_START|||")
             st.session_state['result'] = parts[0].strip()
@@ -139,28 +172,22 @@ if st.button("🚀 EXECUTE PLAN", type="primary"):
             
         st.session_state['last_input'] = user_input
 
-# --- RESULTS DISPLAY ---
+# --- RESULTS ---
 if st.session_state.get('result'):
     st.markdown(st.session_state['result'])
     
-    # Calendar Button (Green)
     if st.session_state.get('event_data'):
         if st.button("📅 Add to Schedule"):
             res = add_event_to_calendar(st.session_state['event_data'])
             if "http" in res:
-                st.balloons()
-                st.success(f"✅ **Saved!** [Open Calendar]({res})")
+                st.success(f"✅ [Event Created]({res})")
             else:
-                st.error("Sync Error. Check Secrets.")
+                st.error("Sync Error")
 
-    # Feedback Loop (Hidden unless needed)
-    with st.expander("🧠 Teach the AI (Feedback)"):
-        col_f1, col_f2 = st.columns([1,4])
-        with col_f1: 
-            rating = st.radio("Rate", ["👍", "👎"], label_visibility="collapsed")
-        with col_f2: 
-            fb_text = st.text_input("Correction?")
-        
+    with st.expander("🧠 Teach AI"):
+        col1, col2 = st.columns([1,4])
+        with col1: r = st.radio("Rate", ["👍", "👎"], label_visibility="collapsed")
+        with col2: fb = st.text_input("Correction")
         if st.button("Save Feedback"):
-            save_feedback(st.session_state.get('last_input'), "Plan", fb_text, rating)
-            st.toast("Learning Saved!")
+            save_feedback(st.session_state.get('last_input'), "Plan", fb, r)
+            st.toast("Learned!")
