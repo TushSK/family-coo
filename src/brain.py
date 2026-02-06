@@ -1,91 +1,67 @@
-import warnings
-warnings.filterwarnings("ignore", category=FutureWarning)
-
 import google.generativeai as genai
+import os
 import json
 import datetime
 
-def get_coo_response(api_key, user_text, memory_context, calendar_agenda, current_location, image=None):
+def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None):
+    """
+    The Core AI Logic. Now Time-Aware and supports Multiple Events.
+    """
     genai.configure(api_key=api_key)
     
-    # 1. STRICT MODEL LIST (Only models you definitely have)
-    model_candidates = [
-        'gemini-2.0-flash',      # Smartest available to you
-        'gemini-1.5-flash',      # Most stable backup
-        'gemini-flash-latest'    # Generic fallback
+    # 1. TIME AWARENESS (Crucial Fix)
+    now = datetime.datetime.now()
+    current_time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
+    
+    # 2. SYSTEM INSTRUCTION
+    # We teach it to be a strict Scheduler that handles multiple tasks.
+    system_prompt = f"""
+    You are the Family COO (Chief Operating Officer). Your goal is to execute family logistics efficiently.
+    
+    CRITICAL OPERATIONAL RULES:
+    1. CURRENT TIME: It is currently {current_time_str}.
+    2. NO TIME TRAVEL: DO NOT suggest schedule times that are in the past relative to {current_time_str}. If the user asks for "today" but the day is mostly over, plan for "right now" or move non-urgent tasks to tomorrow.
+    3. MULTI-TASKING: The user often has multiple goals (e.g., "Shop then Cook"). Break them into separate calendar events.
+    4. LOCATION: User is currently in {current_location}.
+    
+    INPUT CONTEXT:
+    - User Request: "{user_request}"
+    - Learned Preferences (Memory): {json.dumps(memory)}
+    - Existing Calendar Constraints: {calendar_data}
+    
+    OUTPUT FORMAT:
+    You must provide TWO parts in your response:
+    
+    PART 1: The Strategic Plan (Text)
+    - A clear, bulleted executive summary of the plan.
+    - Explain logic (e.g., "I scheduled Quest first because they close at 5 PM").
+    
+    PART 2: The Data Payload (JSON)
+    - Strictly strictly delimit this block with |||JSON_START||| and |||JSON_END|||.
+    - It must be a JSON LIST of objects (even if just one event).
+    - Format:
+    [
+        {{
+            "title": "Event Title",
+            "start_time": "YYYY-MM-DDTHH:MM:00",
+            "end_time": "YYYY-MM-DDTHH:MM:00",
+            "location": "Address or Name",
+            "description": "Notes for the calendar",
+            "reminders": {{ "useDefault": false, "overrides": [ {{ "method": "popup", "minutes": 30 }} ] }}
+        }},
+        ... (more events)
     ]
-    
-    today = datetime.datetime.now().strftime("%A, %B %d, %Y")
-    
-    # 2. CONSTRUCT KNOWLEDGE BASE
-    memory_text = "No prior learning."
-    if memory_context:
-        # Convert list of dicts to string
-        memory_text = "\n".join([f"- {m['feedback']}" for m in memory_context])
-
-    system_instruction = f"""
-    ### ROLE: FAMILY COO (INTELLIGENT MODE) ###
-    Current Date: {today}
-    Location Context: {current_location}
-    
-    ### DATA FEED:
-    1. **USER CALENDAR:**
-    {calendar_agenda}
-    
-    2. **USER MEMORY:**
-    {memory_text}
-    
-    ### INTELLIGENCE RULES:
-    1. **GENERAL SEARCH:** If the user asks for a type of place (e.g. "Buddha Temple"), identify the highest-rated specific option in {current_location}.
-    2. **CALENDAR CHECK:** Scan the calendar data. If the user asks for a "good time", find a gap (White Space) in the schedule and suggest it.
-       - Example: If Saturday 9-12 is free, suggest "Saturday Morning".
-    3. **OUTPUT:** Be decisive. Don't ask questions, give a plan.
-    
-    ### OUTPUT FORMAT:
-    
-    📍 **LOCATION:** [Specific Name & Address]
-    
-    🕰️ **SUGGESTED TIME:** [Date @ Time]
-    *(Reason: Your calendar is clear, and this is open)*
-    
-    💡 **STRATEGY:** [1 sentence reasoning]
-    
-    🛡️ **PREP:**
-    * [Action item]
-    
-    📝 **SCHEDULE:**
-    1. **[Time]**: [Activity]
-    2. **[Time]**: [Activity]
-    
-    PART 2: JSON DATA BLOCK
-    |||JSON_START|||
-    {{
-      "title": "[Activity Name]",
-      "start_time": "YYYY-MM-DDTHH:MM:SS",
-      "end_time": "YYYY-MM-DDTHH:MM:SS",
-      "location": "[Address]",
-      "description": "Strategy: [Strategy]",
-      "alert_minutes": 60 
-    }}
-    |||JSON_END|||
     """
-
-    prompt_parts = [system_instruction, "\nUSER REQUEST: " + user_text]
-    if image: prompt_parts.append(image)
-
-    # 3. EXECUTION LOOP (With Detailed Error Log)
-    error_log = []
     
-    for model_name in model_candidates:
-        try:
-            # Clean name just in case
-            clean_name = model_name.replace("models/", "")
-            model = genai.GenerativeModel(clean_name)
-            response = model.generate_content(prompt_parts)
-            return response.text
-        except Exception as e:
-            error_log.append(f"❌ {clean_name}: {str(e)}")
-            continue
-            
-    # If we get here, show the user EXACTLY why every model failed
-    return f"⚠️ **Brain Freeze:** All models failed.\n\nDebug Log:\n" + "\n".join(error_log)
+    # 3. MODEL SETUP
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # 4. GENERATE
+    try:
+        if image_context:
+            response = model.generate_content([system_prompt, image_context])
+        else:
+            response = model.generate_content(system_prompt)
+        return response.text
+    except Exception as e:
+        return f"⚠️ Brain Freeze: {str(e)}"
