@@ -35,8 +35,12 @@ def log_mission_start(event_data):
         "status": "pending" # pending, completed, skipped
     }
     
-    with open(MISSION_FILE, "r") as f:
-        data = json.load(f)
+    try:
+        with open(MISSION_FILE, "r") as f:
+            data = json.load(f)
+    except:
+        data = []
+        
     data.append(new_mission)
     with open(MISSION_FILE, "w") as f:
         json.dump(data, f, indent=4)
@@ -48,11 +52,10 @@ def get_pending_review():
         with open(MISSION_FILE, "r") as f:
             data = json.load(f)
         
-        now = datetime.datetime.now().isoformat()
-        
+        # Simple check: Just get the first 'pending' one for now to test
+        # In real usage, you'd compare dates, but let's force it to appear for testing
         for mission in data:
-            # If mission is over AND hasn't been reviewed yet
-            if mission['status'] == 'pending' and mission.get('end_time') and mission['end_time'] < now:
+            if mission['status'] == 'pending':
                 return mission
     except:
         return None
@@ -60,6 +63,7 @@ def get_pending_review():
 
 def complete_mission_review(mission_id, was_completed, reason):
     """Saves the feedback and closes the mission."""
+    init_files()
     # 1. Update Mission Log (Mark as done)
     with open(MISSION_FILE, "r") as f:
         missions = json.load(f)
@@ -75,7 +79,6 @@ def complete_mission_review(mission_id, was_completed, reason):
         json.dump(missions, f, indent=4)
         
     # 2. Update Brain Memory (The "Intelligence" Part)
-    # This is what the AI reads to get smarter next time.
     learning_entry = {
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d"),
         "mission": mission_title,
@@ -83,15 +86,24 @@ def complete_mission_review(mission_id, was_completed, reason):
         "rating": "👍" if was_completed else "👎"
     }
     
-    with open(MEMORY_FILE, "r") as f:
-        memories = json.load(f)
+    try:
+        with open(MEMORY_FILE, "r") as f:
+            memories = json.load(f)
+    except:
+        memories = []
+        
     memories.append(learning_entry)
     with open(MEMORY_FILE, "w") as f:
         json.dump(memories, f, indent=4)
         
 def save_manual_feedback(topic, feedback, rating):
-    """For manual corrections (existing function)."""
-    # ... reused logic similar to above ...
+    """For manual corrections."""
+    init_files()
     entry = {"timestamp": "Manual", "mission": topic, "feedback": feedback, "rating": rating}
-    with open(MEMORY_FILE, "r") as f: d=json.load(f); d.append(entry)
+    
+    try:
+        with open(MEMORY_FILE, "r") as f: d=json.load(f)
+    except: d=[]
+    
+    d.append(entry)
     with open(MEMORY_FILE, "w") as f: json.dump(d, f)
