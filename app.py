@@ -4,165 +4,153 @@ import json
 import urllib.parse
 from src.brain import get_coo_response
 from src.gcal import add_event_to_calendar, list_upcoming_events
-from src.utils import load_memory, save_feedback
+from src.utils import load_memory, save_manual_feedback, log_mission_start, get_pending_review, complete_mission_review
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Family COO", 
-    page_icon="🏡", 
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+# --- CONFIG ---
+st.set_page_config(page_title="Family COO", page_icon="🏡", layout="wide", initial_sidebar_state="collapsed")
 
-# --- THE "CLEAN APP" CSS SUITE ---
+# --- CLEAN UI CSS ---
 st.markdown("""
     <style>
-    /* 1. HIDE STREAMLIT UI (The Crown, Rocket, Hamburger, Footer) */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    #MainMenu, footer, header {visibility: hidden;}
     .stAppDeployButton {display: none;}
-    [data-testid="stDecoration"] {display: none;}
-    [data-testid="stStatusWidget"] {visibility: hidden;}
     
-    /* 2. SMART SIDEBAR (Native Theme Adaptation) */
-    /* We DO NOT force colors here. We let Streamlit pick 
-       White for Light Mode and Dark Gray for Dark Mode automatically. */
-       
-    /* 3. CAMERA & BUTTONS (Mobile Optimization) */
+    /* Card Style for Feedback */
+    .feedback-card {
+        padding: 15px; border-radius: 10px; 
+        background-color: #f0f2f6; border-left: 5px solid #ff4b4b;
+        margin-bottom: 20px;
+    }
+    /* Mobile Touch Targets */
+    .stButton>button {width: 100%; border-radius: 12px; height: 3rem; font-weight: 600;}
     div[data-testid="stCameraInput"] {width: 100%;}
-    div[data-testid="stCameraInput"] video {
-        width: 100% !important; 
-        border-radius: 12px;
-        object-fit: cover;
-    }
-    .stButton>button {
-        width: 100%;
-        border-radius: 12px;
-        height: 3.5rem;
-        font-weight: 600;
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- AUTHENTICATION ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-
+# --- AUTH ---
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if not st.session_state.authenticated:
-    st.markdown("<h2 style='text-align: center; margin-top: 50px;'>🏡 Family COO</h2>", unsafe_allow_html=True)
-    pin = st.text_input("Enter PIN", type="password", label_visibility="collapsed", placeholder="Enter Access PIN")
+    st.markdown("<h2 style='text-align: center;'>🏡 Family COO</h2>", unsafe_allow_html=True)
+    pin = st.text_input("PIN", type="password", label_visibility="collapsed", placeholder="Enter PIN")
     if st.button("Unlock"):
         if pin == st.secrets["general"]["app_password"]:
             st.session_state.authenticated = True
             st.rerun()
-        else:
-            st.error("⛔ Incorrect PIN")
+        else: st.error("⛔ Incorrect")
     st.stop()
 
-# --- MAIN APP LOGIC ---
+# --- 🧠 INTELLIGENT CHECK-IN (NEW FEATURE) ---
+# Check if there is a past mission that needs a report
+pending_mission = get_pending_review()
 
-# 1. Initialize Location
-if 'user_location' not in st.session_state:
-    st.session_state.user_location = "Tampa, FL"
+if pending_mission:
+    with st.container():
+        st.markdown(f"""
+        <div class="feedback-card">
+            <h3>📋 Follow Up</h3>
+            <p><strong>{pending_mission['title']}</strong> ended recently.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("Did this happen?")
+        col_y, col_n = st.columns(2)
+        
+        with col_y:
+            if st.button("✅ Yes, Done!"):
+                complete_mission_review(pending_mission['id'], True, "Completed successfully.")
+                st.toast("Great job! Logged.")
+                st.rerun()
+                
+        with col_n:
+            if st.button("❌ No / Skipped"):
+                st.session_state.show_reason_input = True
 
+        if st.session_state.get('show_reason_input'):
+            reason = st.text_input("Why? (Short reason helps me learn)", placeholder="Ex: Too tired, Traffic, Rain...")
+            if st.button("Save Reason"):
+                complete_mission_review(pending_mission['id'], False, reason)
+                st.toast("Understood. Brain updated.")
+                st.session_state.show_reason_input = False
+                st.rerun()
+    
+    st.divider() # Separate feedback from main app
+
+# --- MAIN APP ---
+if 'user_location' not in st.session_state: st.session_state.user_location = "Tampa, FL"
 API_KEY = st.secrets["general"]["gemini_api_key"]
 
-# --- SIDEBAR (Native Elements = Perfect Dark Mode) ---
+# Sidebar
 with st.sidebar:
     st.header("👤 Tushar Khandare")
-    st.caption("Family Administrator")
-    
-    # Using Native Expanders ensures the text color adapts automatically
-    with st.expander("🌍 Location Base", expanded=True):
-        new_loc = st.text_input("City", value=st.session_state.user_location)
-        if new_loc != st.session_state.user_location:
-            st.session_state.user_location = new_loc
-
-    with st.expander("🧠 Brain Memory"):
-        st.write(f"Items Learned: **{len(load_memory())}**")
-        if st.button("Clear Memory"):
-            st.toast("Memory Wiped")
-
+    with st.expander("🌍 Location", expanded=True):
+        st.session_state.user_location = st.text_input("City", value=st.session_state.user_location)
+    with st.expander("🧠 Memory"):
+        st.write(f"Learned Patterns: **{len(load_memory())}**")
+        if st.button("Clear"): pass 
     st.divider()
-    if st.button("Log Out"):
-        st.session_state.authenticated = False
-        st.rerun()
+    if st.button("Log Out"): st.session_state.authenticated = False; st.rerun()
 
-# --- HOME SCREEN ---
+# Main Interface
 st.title("Family COO")
-st.caption(f"📍 Active in: **{st.session_state.user_location}**")
+tab_plan, tab_scan = st.tabs(["📝 Plan", "📸 Scan"])
+img_context, user_input = None, ""
 
-# TABS
-tab_text, tab_cam = st.tabs(["📝 Plan", "📸 Scan"])
-img_context = None
-user_input = ""
+with tab_plan:
+    user_input = st.text_area("Mission Brief", placeholder="What do we need to do?", height=100)
+    upl = st.file_uploader("Upload", type=['jpg','png'], label_visibility="collapsed")
+    if upl: img_context = Image.open(upl)
 
-with tab_text:
-    user_input = st.text_area("Mission Brief", placeholder="Ex: Find a Thai Temple with a market...", height=100)
-    uploaded = st.file_uploader("Upload", type=['jpg','png'], label_visibility="collapsed")
-    if uploaded: img_context = Image.open(uploaded)
+with tab_scan:
+    cam = st.camera_input("Scan", label_visibility="collapsed")
+    if cam: img_context = Image.open(cam)
 
-with tab_cam:
-    cam = st.camera_input("Scanner", label_visibility="collapsed")
-    if cam: 
-        img_context = Image.open(cam)
-        st.success("Photo Captured")
-
-# ACTION BUTTON
-st.divider()
-if st.button("🚀 EXECUTE PLAN", type="primary"):
-    with st.spinner("🔄 Checking Schedule & Maps..."):
-        # Load Data
-        memory = load_memory(limit=5)
+# Execution
+if st.button("🚀 EXECUTE", type="primary"):
+    with st.spinner("Thinking..."):
+        memory = load_memory(limit=10) # More memory context
         cal_data = list_upcoming_events()
-        
-        # AI Processing
         raw = get_coo_response(API_KEY, user_input, memory, cal_data, st.session_state.user_location, img_context)
         
-        # Parse Results
+        # Parse
         if "|||JSON_START|||" in raw:
             parts = raw.split("|||JSON_START|||")
             st.session_state['result'] = parts[0].strip()
             try:
                 js = parts[1].split("|||JSON_END|||")[0].strip()
                 st.session_state['event_data'] = json.loads(js)
-            except:
-                st.session_state['event_data'] = None
+            except: st.session_state['event_data'] = None
         else:
             st.session_state['result'] = raw
             st.session_state['event_data'] = None
             
         st.session_state['last_input'] = user_input
 
-# --- RESULTS & MAPS ---
+# Results
 if st.session_state.get('result'):
     st.markdown(st.session_state['result'])
     
-    # 🗺️ MAP INTEGRATION
     if st.session_state.get('event_data'):
         data = st.session_state['event_data']
-        # Use location from AI, or fallback to current city
-        loc_query = data.get('location', st.session_state.user_location)
-        
-        # Google Maps URL (Universal Link)
-        map_url = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc_query)}"
-        
-        # Action Buttons
+        # 1. Calendar Link
         c1, c2 = st.columns(2)
         with c1:
             if st.button("📅 Add to Calendar"):
                 link = add_event_to_calendar(data)
-                if "http" in link: st.success("Saved!")
+                # CRITICAL: Start tracking this mission for feedback later
+                log_mission_start(data) 
+                
+                if "http" in link: st.success("Scheduled & Tracking!")
                 else: st.error("Error")
+        # 2. Map Link
         with c2:
-            st.link_button("🗺️ Open in Maps", map_url)
+            loc = data.get('location', st.session_state.user_location)
+            st.link_button("🗺️ Map", f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc)}")
 
-    # FEEDBACK
+    # Manual Feedback
     with st.expander("Feedback"):
         c_a, c_b = st.columns([1,4])
         with c_a: rate = st.radio("Rate", ["👍", "👎"], label_visibility="collapsed")
         with c_b: fb = st.text_input("Correction?")
-        if st.button("Save Feedback"):
-            save_feedback(st.session_state.get('last_input'), "Plan", fb, rate)
+        if st.button("Save"):
+            save_manual_feedback(st.session_state.get('last_input'), fb, rate)
             st.toast("Saved!")
