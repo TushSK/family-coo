@@ -21,7 +21,7 @@ def load_memory(limit=10):
     try:
         with open(MEMORY_FILE, "r") as f:
             data = json.load(f)
-            return data[-limit:] 
+        return data[-limit:] 
     except:
         return []
 
@@ -33,12 +33,14 @@ def log_mission_start(event_data):
         "title": event_data.get('title', 'Event'),
         "end_time": event_data.get('end_time'), 
         "status": "pending",
-        "snoozed_until": None # NEW: For snooze logic
+        "snoozed_until": None 
     }
     
     try:
-        with open(MISSION_FILE, "r") as f: data = json.load(f)
-    except: data = []
+        with open(MISSION_FILE, "r") as f:
+            data = json.load(f)
+    except:
+        data = []
         
     data.append(new_mission)
     with open(MISSION_FILE, "w") as f:
@@ -54,7 +56,6 @@ def get_pending_review():
         now = datetime.datetime.now().isoformat()
         
         # Sort by end_time so we ask about the oldest unfinished task first
-        # (Handles multiple events carefully)
         data.sort(key=lambda x: x.get('end_time', ''))
 
         for mission in data:
@@ -72,9 +73,12 @@ def get_pending_review():
 def snooze_mission(mission_id, hours=4):
     """Snoozes a mission so it doesn't annoy the user."""
     init_files()
-    with open(MISSION_FILE, "r") as f:
-        missions = json.load(f)
-    
+    try:
+        with open(MISSION_FILE, "r") as f:
+            missions = json.load(f)
+    except:
+        return
+
     wake_time = (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat()
     
     for m in missions:
@@ -88,8 +92,14 @@ def snooze_mission(mission_id, hours=4):
 def complete_mission_review(mission_id, was_completed, reason):
     """Saves the feedback and closes the mission."""
     init_files()
-    with open(MISSION_FILE, "r") as f: missions = json.load(f)
     
+    # 1. Update Mission Log
+    try:
+        with open(MISSION_FILE, "r") as f:
+            missions = json.load(f)
+    except:
+        missions = []
+
     mission_title = "Unknown Mission"
     for m in missions:
         if m['id'] == mission_id:
@@ -97,8 +107,10 @@ def complete_mission_review(mission_id, was_completed, reason):
             mission_title = m['title']
             break
             
-    with open(MISSION_FILE, "w") as f: json.dump(missions, f, indent=4)
+    with open(MISSION_FILE, "w") as f:
+        json.dump(missions, f, indent=4)
         
+    # 2. Update Brain Memory
     learning_entry = {
         "timestamp": datetime.datetime.now().strftime("%Y-%m-%d"),
         "mission": mission_title,
@@ -106,18 +118,32 @@ def complete_mission_review(mission_id, was_completed, reason):
         "rating": "👍" if was_completed else "👎"
     }
     
-    try: 
-        with open(MEMORY_FILE, "r") as f: memories = json.load(f)
-    except: memories = []
+    try:
+        with open(MEMORY_FILE, "r") as f:
+            memories = json.load(f)
+    except:
+        memories = []
         
     memories.append(learning_entry)
-    with open(MEMORY_FILE, "w") as f: json.dump(memories, f, indent=4)
+    with open(MEMORY_FILE, "w") as f:
+        json.dump(memories, f, indent=4)
         
 def save_manual_feedback(topic, feedback, rating):
+    """For manual corrections."""
     init_files()
-    entry = {"timestamp": "Manual", "mission": topic, "feedback": feedback, "rating": rating}
-    try: 
-        with open(MEMORY_FILE, "r") as f: d=json.load(f)
-    except: d=[]
+    entry = {
+        "timestamp": "Manual", 
+        "mission": topic, 
+        "feedback": feedback, 
+        "rating": rating
+    }
+    
+    try:
+        with open(MEMORY_FILE, "r") as f:
+            d = json.load(f)
+    except:
+        d = []
+    
     d.append(entry)
-    with open(MEMORY_FILE, "w") as f: json.dump(d, f)
+    with open(MEMORY_FILE, "w") as f:
+        json.dump(d, f, indent=4)

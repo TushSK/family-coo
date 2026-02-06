@@ -4,10 +4,22 @@ import json
 import urllib.parse
 from src.brain import get_coo_response
 from src.gcal import add_event_to_calendar, list_upcoming_events
-from src.utils import load_memory, save_manual_feedback, log_mission_start, get_pending_review, complete_mission_review, snooze_mission
+from src.utils import (
+    load_memory, 
+    save_manual_feedback, 
+    log_mission_start, 
+    get_pending_review, 
+    complete_mission_review, 
+    snooze_mission
+)
 
 # --- CONFIG ---
-st.set_page_config(page_title="Family COO", page_icon="🏡", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="Family COO", 
+    page_icon="🏡", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
 
 # --- MOBILE OPTIMIZED CSS ---
 st.markdown("""
@@ -20,19 +32,24 @@ st.markdown("""
     div[data-testid="stDecoration"] {display: none !important;}
     div[data-testid="stStatusWidget"] {display: none !important;}
     
-    /* 2. THEME ADAPTATION (Use System Variables) */
-    /* This ensures Dark/Light mode follows your phone settings exactly */
+    /* 2. THEME ADAPTATION */
     .reportview-container {
         background: var(--background-color);
         color: var(--text-color);
     }
     
     /* 3. MOBILE TOUCH TARGETS */
-    .stButton>button {width: 100%; border-radius: 12px; height: 3.5rem; font-weight: 600;}
+    .stButton>button {
+        width: 100%; 
+        border-radius: 12px; 
+        height: 3.5rem; 
+        font-weight: 600;
+    }
     
     /* 4. FEEDBACK CARD STYLE */
     .feedback-card {
-        padding: 15px; border-radius: 12px; 
+        padding: 15px; 
+        border-radius: 12px; 
         background-color: var(--secondary-background-color); 
         border-left: 6px solid #FF4B4B;
         margin-bottom: 20px;
@@ -41,15 +58,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- AUTH ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
 if not st.session_state.authenticated:
     st.markdown("<h2 style='text-align: center; margin-top:50px;'>🏡 Family COO</h2>", unsafe_allow_html=True)
     pin = st.text_input("Access PIN", type="password", label_visibility="collapsed")
+    
     if st.button("Unlock"):
         if pin == st.secrets["general"]["app_password"]:
             st.session_state.authenticated = True
             st.rerun()
-        else: st.error("⛔ Incorrect")
+        else:
+            st.error("⛔ Incorrect")
     st.stop()
 
 # --- INTELLIGENT CHECK-IN (With Snooze) ---
@@ -90,36 +111,44 @@ if pending_mission:
     st.divider()
 
 # --- MAIN APP ---
-if 'user_location' not in st.session_state: st.session_state.user_location = "Tampa, FL"
+if 'user_location' not in st.session_state:
+    st.session_state.user_location = "Tampa, FL"
+
 API_KEY = st.secrets["general"]["gemini_api_key"]
 
 # SIDEBAR
 with st.sidebar:
     st.header("👤 Tushar Khandare")
+    
     with st.expander("🌍 Location", expanded=True):
         st.session_state.user_location = st.text_input("City", value=st.session_state.user_location)
+        
     with st.expander("🧠 Memory"):
         st.write(f"Learned Patterns: **{len(load_memory())}**")
-        if st.button("Clear"): pass 
+        if st.button("Clear"):
+            pass 
+            
     st.divider()
-    if st.button("Log Out"): st.session_state.authenticated = False; st.rerun()
+    if st.button("Log Out"):
+        st.session_state.authenticated = False
+        st.rerun()
 
 # MAIN INTERFACE
 st.title("Family COO")
 tab_plan, tab_scan = st.tabs(["📝 Plan", "📸 Scan"])
-img_context, user_input = None, ""
+img_context = None
+user_input = ""
 
 with tab_plan:
     user_input = st.text_area("Mission Brief", placeholder="What do we need to do?", height=100)
     upl = st.file_uploader("Upload", type=['jpg','png'], label_visibility="collapsed")
-    if upl: img_context = Image.open(upl)
+    if upl:
+        img_context = Image.open(upl)
 
 with tab_scan:
     # CAMERA PERMISSION FIX: Only render camera if requested
     st.info("💡 Tap below to activate camera.")
     
-    # We use a checkbox to toggle camera state. 
-    # This prevents the permission popup from appearing until the user actively clicks.
     if st.toggle("Activate Camera"):
         cam = st.camera_input("Scan", label_visibility="collapsed")
         if cam: 
@@ -139,7 +168,8 @@ if st.button("🚀 EXECUTE", type="primary"):
             try:
                 js = parts[1].split("|||JSON_END|||")[0].strip()
                 st.session_state['event_data'] = json.loads(js)
-            except: st.session_state['event_data'] = None
+            except:
+                st.session_state['event_data'] = None
         else:
             st.session_state['result'] = raw
             st.session_state['event_data'] = None
@@ -153,20 +183,28 @@ if st.session_state.get('result'):
     if st.session_state.get('event_data'):
         data = st.session_state['event_data']
         c1, c2 = st.columns(2)
+        
         with c1:
             if st.button("📅 Add to Calendar"):
                 link = add_event_to_calendar(data)
                 log_mission_start(data) # Start tracking
-                if "http" in link: st.success("Scheduled!")
-                else: st.error("Error")
+                if "http" in link:
+                    st.success("Scheduled!")
+                else:
+                    st.error("Error")
+                    
         with c2:
             loc = data.get('location', st.session_state.user_location)
-            st.link_button("🗺️ Map", f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc)}")
+            map_link = f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(loc)}"
+            st.link_button("🗺️ Map", map_link)
 
     with st.expander("Feedback"):
         c_a, c_b = st.columns([1,4])
-        with c_a: rate = st.radio("Rate", ["👍", "👎"], label_visibility="collapsed")
-        with c_b: fb = st.text_input("Correction?")
+        with c_a:
+            rate = st.radio("Rate", ["👍", "👎"], label_visibility="collapsed")
+        with c_b:
+            fb = st.text_input("Correction?")
+            
         if st.button("Save"):
             save_manual_feedback(st.session_state.get('last_input'), fb, rate)
             st.toast("Saved!")
