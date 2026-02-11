@@ -33,5 +33,96 @@
         "end_time": null,
         "status": "pending",
         "snoozed_until": null
+    },
+    {
+        "id": "b29199b2",
+        "title": "Beach Visit",
+        "end_time": "2026-02-14T16:00:00",
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "7e26d365",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "23bee64e",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "63e81f12",
+        "title": "Beach Visit",
+        "end_time": "2026-02-15T16:00:00",
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "b845da78",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "5b1d31b4",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "b54f45af",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "c86c151e",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "de9e2173",
+        "title": "Beach Visit",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "2a637782",
+        "title": "Movie",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "fde8d7d1",
+        "title": "Movie Night",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "428b5032",
+        "title": "Beach Trip",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "69f38f8d",
+        "title": "Beach Trip",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
     }
 ]

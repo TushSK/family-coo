@@ -28,5 +28,23 @@
         "mission": "Last Plan",
         "feedback": "",
         "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "add the date on the calendar schedule",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "When i click on the Map, it should list the places related to the suggestion of the plan activity asked for. ",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "The time suggested overlaps with an already scheduled activity. Check my calendar first and then suggest",
+        "rating": "\ud83d\udc4e"
     }
 ]
