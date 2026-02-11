@@ -1,0 +1,37 @@
+[
+    {
+        "id": "8ae71942",
+        "title": "Judo",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "40b3bb1b",
+        "title": "Judo",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "449dea57",
+        "title": "Swimming Classes",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "fd3163f9",
+        "title": "Swimming Classes",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "f3975d1b",
+        "title": "Swim Class",
+        "end_time": null,
+        "status": "pending",
+        "snoozed_until": null
+    }
+]

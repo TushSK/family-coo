@@ -1,85 +1,100 @@
-import google.generativeai as genai
 import os
 import json
 import datetime
-import time
+import base64
+import re
+from groq import Groq
+
+def encode_image(image):
+    import io
+    buffered = io.BytesIO()
+    image.save(buffered, format="JPEG")
+    return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The 'Context-First' Brain.
-    Prioritizes History/Memory for locations. 
-    Asks MINIMAL questions only when necessary.
+    The Polished Groq Brain.
+    Now includes 'pre_prep' instructions for events.
     """
-    genai.configure(api_key=api_key)
+    client = Groq(api_key=api_key)
     
     # 1. SETUP CONTEXT
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
     
-    history_context = ""
+    history_txt = ""
     if chat_history:
-        # We provide the last 6 turns so it remembers "Judo is at 123 Main St" from 2 minutes ago
-        formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-6:]])
-        history_context = f"PREVIOUS CONVERSATION:\n{formatted_history}\n"
+        history_txt = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-5:]])
 
+    # 2. SYSTEM PROMPT
     system_prompt = f"""
-    You are the Family COO.
-    CURRENT TIME: {current_time_str}.
-    USER LOCATION: {current_location}.
+    You are the Family COO. Current time: {current_time_str}. Location: {current_location}.
     
-    {history_context}
+    MEMORY BANK:
+    {json.dumps(memory)}
     
-    CRITICAL RULES FOR LOCATION:
-    1. **CHECK CONTEXT FIRST:** Before asking for a location, check the Chat History, Memory, and Image content. If the address is there, USE IT.
-    2. **INTELLIGENT INFERENCE:** If user says "Home Depot" and you see a Home Depot address in the history/memory, schedule it there.
-    3. **MINIMAL QUESTIONS:** If you MUST ask, keep it under 10 words. (e.g., "Which Home Depot location?" is better than "Could you please provide the address...").
-    4. **HANDLE 'NEARBY':** If user says "nearby", select a generic place near {current_location}.
+    CALENDAR CONSTRAINTS:
+    {calendar_data}
     
-    OUTPUT FORMAT:
-    Return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
+    HISTORY:
+    {history_txt}
     
-    SCENARIO A: Clarification needed (Location unknown).
-    {{
-        "type": "question",
-        "text": "Which location?"
+    TASK:
+    Analyze request: "{user_request}"
+    
+    RULES:
+    1. **PRE-PREP:** For every plan, include a 'pre_prep' field with 1-2 short, actionable preparation steps (e.g., "Wash Judo Gi," "Print tickets," "Pack water bottle").
+    2. **DUPLICATES:** If event exists, use type 'confirmation'.
+    3. **OUTPUT JSON:** Return ONLY a JSON object.
+    
+    FORMAT EXAMPLES:
+    {{ "type": "question", "text": "Which location?" }}
+    
+    {{ 
+      "type": "plan", 
+      "text": "I've scheduled the swimming class.", 
+      "pre_prep": "💡 Prep: Pack swim cap, goggles, and a towel. Don't forget sunscreen.",
+      "events": [ {{ "title": "Swim Class", "start_time": "2026-02-26T16:00:00", "location": "Loretta Pool" }} ] 
     }}
     
-    SCENARIO B: Plan ready (Location found in context).
-    {{
-        "type": "plan",
-        "text": "Scheduled at [Address Found].",
-        "events": [
-            {{
-                "title": "Event Title",
-                "start_time": "YYYY-MM-DDTHH:MM:00",
-                "end_time": "YYYY-MM-DDTHH:MM:00",
-                "location": "Address Found",
-                "description": "Notes"
-            }}
-        ]
-    }}
+    {{ "type": "confirmation", "text": "You already have that scheduled." }}
     """
-    
-    # 2. MODEL LADDER (Stable & Fast)
-    model_ladder = [
-        "gemini-1.5-flash-latest",      # Best balance of speed/context
-        "gemini-flash-latest",
-        "gemini-1.5-pro-latest"
-    ]
-    
-    last_error = ""
-    
-    for model_name in model_ladder:
-        try:
-            model = genai.GenerativeModel(model_name)
-            if image_context:
-                response = model.generate_content([system_prompt, image_context])
-            else:
-                response = model.generate_content(system_prompt)
-            return response.text
-            
-        except Exception as e:
-            last_error = f"{model_name}: {str(e)}"
-            continue
 
-    return f"⚠️ System Error. Last debug: {last_error}"
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
+
+    # 3. CONTENT PAYLOAD
+    if image_context:
+        model = "llama-3.2-90b-vision-preview"
+        base64_image = encode_image(image_context)
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_request},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]
+        })
+    else:
+        model = "llama-3.3-70b-versatile" 
+        messages.append({"role": "user", "content": user_request})
+
+    # 4. EXECUTE
+    try:
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.6,
+            max_tokens=1024,
+            stream=False
+        )
+        
+        text = completion.choices[0].message.content
+        
+        # 5. CLEANUP
+        match = re.search(r'(\{.*\})', text, re.DOTALL)
+        if match: return match.group(1)
+        return text
+
+    except Exception as e:
+        return f'{{"type": "error", "text": "Groq Error: {str(e)}"}}'
