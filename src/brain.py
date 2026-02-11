@@ -7,8 +7,9 @@ import re
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The 'Unstoppable' Brain.
-    Prioritizes LITE models and parses error messages to wait exactly as long as needed.
+    The 'Stubborn' Brain.
+    It uses ONLY the models confirmed to exist (Gemini 2.0).
+    If it hits a rate limit, it WAITS the full duration required.
     """
     genai.configure(api_key=api_key)
     
@@ -55,50 +56,55 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     }}
     """
     
-    # 2. THE STRATEGIC MODEL LADDER
-    # We use specific versions proven to exist in your logs.
-    model_ladder = [
-        "gemini-2.0-flash-lite-001",    # 1. Lite = Less Traffic (Best chance)
-        "gemini-2.0-flash",             # 2. Standard (Often busy)
-        "gemini-1.5-pro-latest",        # 3. Pro (Different quota bucket)
-        "gemini-1.5-flash-latest"       # 4. Old Flash (Backup)
-    ]
+    # 2. THE CONFIRMED MODEL LIST
+    # We ONLY use the 2.0 models because 1.5 is throwing 404s.
+    # We start with "Lite" because it's faster.
+    model_name = "gemini-2.0-flash-lite-preview-02-05" 
     
-    last_error = ""
-    
-    for model_name in model_ladder:
-        try:
-            # print(f"Attempting {model_name}...") 
-            model = genai.GenerativeModel(model_name)
-            
-            if image_context:
-                response = model.generate_content([system_prompt, image_context])
-            else:
-                response = model.generate_content(system_prompt)
-            return response.text
-            
-        except Exception as e:
-            error_str = str(e)
-            last_error = f"{model_name}: {error_str}"
-            
-            # 3. SMART WAIT LOGIC
-            if "429" in error_str or "Quota" in error_str:
-                # Try to find "retry in X seconds" in the error message
-                match = re.search(r"retry in (\d+)", error_str)
-                wait_time = float(match.group(1)) + 2 if match else 5
-                
-                # If wait is too long (> 20s), skip to next model instead of waiting
-                if wait_time > 20:
-                    time.sleep(1)
-                    continue 
-                else:
-                    time.sleep(wait_time)
-                    # Retry the SAME model one more time
-                    try:
-                        if image_context: response = model.generate_content([system_prompt, image_context])
-                        else: response = model.generate_content(system_prompt)
-                        return response.text
-                    except:
-                        continue # If it fails twice, move on
+    # Fallback if Lite fails
+    backup_model_name = "gemini-2.0-flash"
 
-    return f"⚠️ SYSTEM OVERLOAD. All models are currently busy. Please wait 1 minute. (Debug: {last_error})"
+    models_to_try = [model_name, backup_model_name]
+    
+    for model_target in models_to_try:
+        model = genai.GenerativeModel(model_target)
+        
+        # Retry Loop: Try up to 3 times per model
+        attempts = 0
+        while attempts < 3:
+            try:
+                if image_context:
+                    response = model.generate_content([system_prompt, image_context])
+                else:
+                    response = model.generate_content(system_prompt)
+                return response.text
+                
+            except Exception as e:
+                error_str = str(e)
+                
+                # CHECK FOR QUOTA ERROR (429)
+                if "429" in error_str or "Quota" in error_str:
+                    # Find the exact wait time in the error message
+                    # Example: "retry in 39.23 seconds"
+                    match = re.search(r"retry in (\d+)", error_str)
+                    
+                    if match:
+                        wait_seconds = int(match.group(1)) + 2 # Add 2s buffer
+                    else:
+                        wait_seconds = 10 # Default wait if parsing fails
+                    
+                    # STUBBORN WAIT: actually sleep the full time
+                    time.sleep(wait_seconds)
+                    attempts += 1
+                    continue # Loop back and try again!
+                
+                # If it's a 404 (Not Found), break loop and try next model
+                elif "404" in error_str:
+                    break
+                
+                else:
+                    # Unknown error? Wait 2s and retry
+                    time.sleep(2)
+                    attempts += 1
+
+    return "⚠️ SYSTEM BUSY: Google is strictly rate-limiting right now. Please wait 2 minutes and try again."
