@@ -6,8 +6,8 @@ import time
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The Indestructible Brain.
-    Features: Conversational Memory + Robust Error Handling + Automatic Retries.
+    The Precision Brain.
+    Uses ONLY models confirmed to exist on your server (Gemini 2.0 series).
     """
     genai.configure(api_key=api_key)
     
@@ -29,23 +29,23 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     {history_context}
     
     RULES:
-    1. **CLARIFY IF NEEDED:** If the user asks for a specific activity (e.g., "Plan Judo") but does NOT specify a location, and you don't know it from Memory/History, ask a clarification question.
-    2. **HANDLE 'NEARBY':** If the user says "Nearby", use the USER LOCATION ({current_location}) to find a generic placeholder.
-    3. **OUTPUT JSON:** You must return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
+    1. **CLARIFY:** If the user asks for an activity without a location, ask where.
+    2. **NEARBY:** If user says "nearby", find a placeholder near {current_location}.
+    3. **OUTPUT JSON:** Return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
     
-    SCENARIO A: You need more info.
+    SCENARIO A: Clarification needed.
     {{
         "type": "question",
-        "text": "I can help with that. Where is the Judo class located?"
+        "text": "Where should I look for this?"
     }}
     
-    SCENARIO B: You have enough info to plan.
+    SCENARIO B: Plan ready.
     {{
         "type": "plan",
-        "text": "I've scheduled Judo for 5:30 PM.",
+        "text": "I've scheduled it.",
         "events": [
             {{
-                "title": "Judo Class",
+                "title": "Event Title",
                 "start_time": "YYYY-MM-DDTHH:MM:00",
                 "end_time": "YYYY-MM-DDTHH:MM:00",
                 "location": "Address",
@@ -55,13 +55,13 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     }}
     """
     
-    # 3. THE MODEL LADDER (Safety Net)
-    # We mix new models (best quality) with old models (best availability)
+    # 3. THE CONFIRMED MODEL LADDER
+    # These match your Diagnostic Report exactly.
+    # We prioritize "Lite" to avoid Quota (429) errors.
     model_ladder = [
-        "gemini-1.5-flash",          # Standard
-        "gemini-2.0-flash",          # Newest
-        "gemini-1.5-pro",            # High Intelligence
-        "gemini-pro"                 # Old Reliable (Fallback)
+        "gemini-2.0-flash-lite-preview-02-05", # FASTEST, usually open quota
+        "gemini-2.0-flash",                  # Standard, often busy
+        "gemini-2.0-flash-001"               # Backup version
     ]
     
     last_error = ""
@@ -79,15 +79,8 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
             error_str = str(e)
             last_error = f"{model_name}: {error_str}"
             
-            # If it's a Quota error (429), wait a bit and try the next one
-            if "429" in error_str or "Quota" in error_str:
-                time.sleep(2)
-                continue
-            # If it's a 404 (Not Found), just skip immediately
-            elif "404" in error_str:
-                continue
-            else:
-                # Unknown error? Try next anyway.
-                continue
+            # If 429 (Busy) or 404 (Not Found), try next model
+            time.sleep(1) 
+            continue
 
-    return f"⚠️ ALL MODELS FAILED. Last error: {last_error}"
+    return f"⚠️ ALL MODELS FAILED. Debug Info: {last_error}"
