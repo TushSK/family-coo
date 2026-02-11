@@ -6,8 +6,9 @@ import time
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The 'Stable' Brain.
-    Uses 'latest' aliases to find the high-speed, high-quota models.
+    The 'Context-First' Brain.
+    Prioritizes History/Memory for locations. 
+    Asks MINIMAL questions only when necessary.
     """
     genai.configure(api_key=api_key)
     
@@ -17,6 +18,7 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     
     history_context = ""
     if chat_history:
+        # We provide the last 6 turns so it remembers "Judo is at 123 Main St" from 2 minutes ago
         formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-6:]])
         history_context = f"PREVIOUS CONVERSATION:\n{formatted_history}\n"
 
@@ -27,40 +29,42 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     
     {history_context}
     
-    RULES:
-    1. **CLARIFY:** If location is missing, ask where.
-    2. **NEARBY:** If "nearby" is used, find a placeholder near {current_location}.
-    3. **OUTPUT JSON:** Return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
+    CRITICAL RULES FOR LOCATION:
+    1. **CHECK CONTEXT FIRST:** Before asking for a location, check the Chat History, Memory, and Image content. If the address is there, USE IT.
+    2. **INTELLIGENT INFERENCE:** If user says "Home Depot" and you see a Home Depot address in the history/memory, schedule it there.
+    3. **MINIMAL QUESTIONS:** If you MUST ask, keep it under 10 words. (e.g., "Which Home Depot location?" is better than "Could you please provide the address...").
+    4. **HANDLE 'NEARBY':** If user says "nearby", select a generic place near {current_location}.
     
-    SCENARIO A: Clarification needed.
+    OUTPUT FORMAT:
+    Return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
+    
+    SCENARIO A: Clarification needed (Location unknown).
     {{
         "type": "question",
-        "text": "Where should I look for this?"
+        "text": "Which location?"
     }}
     
-    SCENARIO B: Plan ready.
+    SCENARIO B: Plan ready (Location found in context).
     {{
         "type": "plan",
-        "text": "I've scheduled it.",
+        "text": "Scheduled at [Address Found].",
         "events": [
             {{
                 "title": "Event Title",
                 "start_time": "YYYY-MM-DDTHH:MM:00",
                 "end_time": "YYYY-MM-DDTHH:MM:00",
-                "location": "Address",
+                "location": "Address Found",
                 "description": "Notes"
             }}
         ]
     }}
     """
     
-    # 2. THE STABLE MODEL LADDER
-    # We use 'latest' aliases which usually map to the most stable, high-quota endpoints.
+    # 2. MODEL LADDER (Stable & Fast)
     model_ladder = [
-        "gemini-1.5-flash-latest",      # High Speed, High Quota
-        "gemini-flash-latest",          # Backup Alias
-        "gemini-1.5-pro-latest",        # High Intelligence
-        "gemini-2.0-flash-lite-preview-02-05" # Fallback (New but low quota)
+        "gemini-1.5-flash-latest",      # Best balance of speed/context
+        "gemini-flash-latest",
+        "gemini-1.5-pro-latest"
     ]
     
     last_error = ""
@@ -75,8 +79,7 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
             return response.text
             
         except Exception as e:
-            # If a model fails, we just try the next one instantly.
             last_error = f"{model_name}: {str(e)}"
             continue
 
-    return f"⚠️ SYSTEM ERROR: Could not connect to Google AI. Last error: {last_error}"
+    return f"⚠️ System Error. Last debug: {last_error}"
