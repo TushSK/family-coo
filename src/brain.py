@@ -3,12 +3,12 @@ import os
 import json
 import datetime
 import time
-import random
+import re
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The 'Patient' Brain.
-    Handles '429 Quota' errors by switching models and waiting intelligently.
+    The 'Unstoppable' Brain.
+    Prioritizes LITE models and parses error messages to wait exactly as long as needed.
     """
     genai.configure(api_key=api_key)
     
@@ -18,11 +18,9 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     
     history_context = ""
     if chat_history:
-        # Keep last 4 turns to save tokens
         formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-4:]])
         history_context = f"PREVIOUS CONVERSATION:\n{formatted_history}\n"
 
-    # 2. SYSTEM PROMPT
     system_prompt = f"""
     You are the Family COO.
     CURRENT TIME: {current_time_str}.
@@ -31,8 +29,8 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     {history_context}
     
     RULES:
-    1. **CLARIFY:** If the user asks for an activity without a location, ask where.
-    2. **NEARBY:** If user says "nearby", find a placeholder near {current_location}.
+    1. **CLARIFY:** If location is missing, ask where.
+    2. **NEARBY:** If "nearby" is used, find a placeholder near {current_location}.
     3. **OUTPUT JSON:** Return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
     
     SCENARIO A: Clarification needed.
@@ -57,24 +55,22 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     }}
     """
     
-    # 3. ROBUST MODEL LADDER
-    # We prioritize the "Lite" model because it has a separate quota bucket.
+    # 2. THE STRATEGIC MODEL LADDER
+    # We use specific versions proven to exist in your logs.
     model_ladder = [
-        "gemini-2.0-flash-lite-preview-02-05", # First choice: Fast & Free
-        "gemini-2.0-flash",                  # Second choice: Standard
-        "gemini-1.5-pro",                    # Third choice: Stable Backup
+        "gemini-2.0-flash-lite-001",    # 1. Lite = Less Traffic (Best chance)
+        "gemini-2.0-flash",             # 2. Standard (Often busy)
+        "gemini-1.5-pro-latest",        # 3. Pro (Different quota bucket)
+        "gemini-1.5-flash-latest"       # 4. Old Flash (Backup)
     ]
     
     last_error = ""
     
-    for i, model_name in enumerate(model_ladder):
+    for model_name in model_ladder:
         try:
+            # print(f"Attempting {model_name}...") 
             model = genai.GenerativeModel(model_name)
             
-            # If this is a RETRY (i > 0), wait a few seconds to let the API cool down
-            if i > 0:
-                time.sleep(4) 
-                
             if image_context:
                 response = model.generate_content([system_prompt, image_context])
             else:
@@ -85,16 +81,24 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
             error_str = str(e)
             last_error = f"{model_name}: {error_str}"
             
-            # If 429 (Busy), we MUST wait longer.
+            # 3. SMART WAIT LOGIC
             if "429" in error_str or "Quota" in error_str:
-                # Exponential backoff: Wait 5s, then 10s...
-                wait_time = (i + 1) * 5
-                time.sleep(wait_time)
-                continue
-            elif "404" in error_str:
-                # Model missing? Skip instantly.
-                continue
-            else:
-                continue
+                # Try to find "retry in X seconds" in the error message
+                match = re.search(r"retry in (\d+)", error_str)
+                wait_time = float(match.group(1)) + 2 if match else 5
+                
+                # If wait is too long (> 20s), skip to next model instead of waiting
+                if wait_time > 20:
+                    time.sleep(1)
+                    continue 
+                else:
+                    time.sleep(wait_time)
+                    # Retry the SAME model one more time
+                    try:
+                        if image_context: response = model.generate_content([system_prompt, image_context])
+                        else: response = model.generate_content(system_prompt)
+                        return response.text
+                    except:
+                        continue # If it fails twice, move on
 
-    return f"⚠️ ALL MODELS BUSY. Please wait 1 minute and try again. (Last error: {last_error})"
+    return f"⚠️ SYSTEM OVERLOAD. All models are currently busy. Please wait 1 minute. (Debug: {last_error})"
