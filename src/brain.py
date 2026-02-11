@@ -6,22 +6,21 @@ import time
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The 'Conversational' Brain.
-    Can now return a PLAN (List of events) OR a QUESTION (Clarification).
+    The Indestructible Brain.
+    Features: Conversational Memory + Robust Error Handling + Automatic Retries.
     """
     genai.configure(api_key=api_key)
     
-    # 1. TIME & CONTEXT
+    # 1. SETUP CONTEXT
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
     
-    # 2. HISTORY FORMATTING
     history_context = ""
     if chat_history:
         formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-6:]])
         history_context = f"PREVIOUS CONVERSATION:\n{formatted_history}\n"
 
-    # 3. SYSTEM INSTRUCTION (The Major Upgrade)
+    # 2. SYSTEM PROMPT
     system_prompt = f"""
     You are the Family COO.
     CURRENT TIME: {current_time_str}.
@@ -30,17 +29,14 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     {history_context}
     
     RULES:
-    1. **CLARIFY IF NEEDED:** If the user asks for a specific activity (e.g., "Plan Judo") but does NOT specify a location, and you don't know it from Memory/History, DO NOT GUESS. Instead, ask a clarification question.
-    2. **HANDLE 'NEARBY':** If the user says "Nearby" or "Close to me", use the USER LOCATION ({current_location}) to find a generic placeholder (e.g., "Judo Center near {current_location}").
-    3. **SIMPLICITY:** Keep the text summary BRIEF and conversational. Avoid corporate jargon.
-    
-    OUTPUT FORMAT:
-    You must return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
+    1. **CLARIFY IF NEEDED:** If the user asks for a specific activity (e.g., "Plan Judo") but does NOT specify a location, and you don't know it from Memory/History, ask a clarification question.
+    2. **HANDLE 'NEARBY':** If the user says "Nearby", use the USER LOCATION ({current_location}) to find a generic placeholder.
+    3. **OUTPUT JSON:** You must return a JSON object strictly delimited by |||JSON_START||| and |||JSON_END|||.
     
     SCENARIO A: You need more info.
     {{
         "type": "question",
-        "text": "I can help with that. Where is the Judo class located, or should I look for one nearby?"
+        "text": "I can help with that. Where is the Judo class located?"
     }}
     
     SCENARIO B: You have enough info to plan.
@@ -59,11 +55,13 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     }}
     """
     
-    # 4. ROBUST MODEL LADDER
+    # 3. THE MODEL LADDER (Safety Net)
+    # We mix new models (best quality) with old models (best availability)
     model_ladder = [
-        "gemini-2.0-flash-lite-preview-02-05", # Fast & conversational
-        "gemini-2.0-flash",
-        "gemini-1.5-flash"
+        "gemini-1.5-flash",          # Standard
+        "gemini-2.0-flash",          # Newest
+        "gemini-1.5-pro",            # High Intelligence
+        "gemini-pro"                 # Old Reliable (Fallback)
     ]
     
     last_error = ""
@@ -78,8 +76,18 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
             return response.text
             
         except Exception as e:
-            last_error = f"Model {model_name} failed: {str(e)}"
-            time.sleep(1)
-            continue
+            error_str = str(e)
+            last_error = f"{model_name}: {error_str}"
+            
+            # If it's a Quota error (429), wait a bit and try the next one
+            if "429" in error_str or "Quota" in error_str:
+                time.sleep(2)
+                continue
+            # If it's a 404 (Not Found), just skip immediately
+            elif "404" in error_str:
+                continue
+            else:
+                # Unknown error? Try next anyway.
+                continue
 
-    return f"⚠️ Brain Freeze: {last_error}"
+    return f"⚠️ ALL MODELS FAILED. Last error: {last_error}"
