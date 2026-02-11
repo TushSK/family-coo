@@ -3,11 +3,12 @@ import os
 import json
 import datetime
 import time
+import random
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The Precision Brain.
-    Uses ONLY models confirmed to exist on your server (Gemini 2.0 series).
+    The 'Patient' Brain.
+    Handles '429 Quota' errors by switching models and waiting intelligently.
     """
     genai.configure(api_key=api_key)
     
@@ -17,7 +18,8 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     
     history_context = ""
     if chat_history:
-        formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-6:]])
+        # Keep last 4 turns to save tokens
+        formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-4:]])
         history_context = f"PREVIOUS CONVERSATION:\n{formatted_history}\n"
 
     # 2. SYSTEM PROMPT
@@ -55,20 +57,24 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     }}
     """
     
-    # 3. THE CONFIRMED MODEL LADDER
-    # These match your Diagnostic Report exactly.
-    # We prioritize "Lite" to avoid Quota (429) errors.
+    # 3. ROBUST MODEL LADDER
+    # We prioritize the "Lite" model because it has a separate quota bucket.
     model_ladder = [
-        "gemini-2.0-flash-lite-preview-02-05", # FASTEST, usually open quota
-        "gemini-2.0-flash",                  # Standard, often busy
-        "gemini-2.0-flash-001"               # Backup version
+        "gemini-2.0-flash-lite-preview-02-05", # First choice: Fast & Free
+        "gemini-2.0-flash",                  # Second choice: Standard
+        "gemini-1.5-pro",                    # Third choice: Stable Backup
     ]
     
     last_error = ""
     
-    for model_name in model_ladder:
+    for i, model_name in enumerate(model_ladder):
         try:
             model = genai.GenerativeModel(model_name)
+            
+            # If this is a RETRY (i > 0), wait a few seconds to let the API cool down
+            if i > 0:
+                time.sleep(4) 
+                
             if image_context:
                 response = model.generate_content([system_prompt, image_context])
             else:
@@ -79,8 +85,16 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
             error_str = str(e)
             last_error = f"{model_name}: {error_str}"
             
-            # If 429 (Busy) or 404 (Not Found), try next model
-            time.sleep(1) 
-            continue
+            # If 429 (Busy), we MUST wait longer.
+            if "429" in error_str or "Quota" in error_str:
+                # Exponential backoff: Wait 5s, then 10s...
+                wait_time = (i + 1) * 5
+                time.sleep(wait_time)
+                continue
+            elif "404" in error_str:
+                # Model missing? Skip instantly.
+                continue
+            else:
+                continue
 
-    return f"⚠️ ALL MODELS FAILED. Debug Info: {last_error}"
+    return f"⚠️ ALL MODELS BUSY. Please wait 1 minute and try again. (Last error: {last_error})"
