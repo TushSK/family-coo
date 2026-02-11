@@ -3,13 +3,11 @@ import os
 import json
 import datetime
 import time
-import re
 
 def get_coo_response(api_key, user_request, memory, calendar_data, current_location, image_context=None, chat_history=None):
     """
-    The 'Stubborn' Brain.
-    It uses ONLY the models confirmed to exist (Gemini 2.0).
-    If it hits a rate limit, it WAITS the full duration required.
+    The 'Stable' Brain.
+    Uses 'latest' aliases to find the high-speed, high-quota models.
     """
     genai.configure(api_key=api_key)
     
@@ -19,7 +17,7 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     
     history_context = ""
     if chat_history:
-        formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-4:]])
+        formatted_history = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-6:]])
         history_context = f"PREVIOUS CONVERSATION:\n{formatted_history}\n"
 
     system_prompt = f"""
@@ -56,55 +54,29 @@ def get_coo_response(api_key, user_request, memory, calendar_data, current_locat
     }}
     """
     
-    # 2. THE CONFIRMED MODEL LIST
-    # We ONLY use the 2.0 models because 1.5 is throwing 404s.
-    # We start with "Lite" because it's faster.
-    model_name = "gemini-2.0-flash-lite-preview-02-05" 
+    # 2. THE STABLE MODEL LADDER
+    # We use 'latest' aliases which usually map to the most stable, high-quota endpoints.
+    model_ladder = [
+        "gemini-1.5-flash-latest",      # High Speed, High Quota
+        "gemini-flash-latest",          # Backup Alias
+        "gemini-1.5-pro-latest",        # High Intelligence
+        "gemini-2.0-flash-lite-preview-02-05" # Fallback (New but low quota)
+    ]
     
-    # Fallback if Lite fails
-    backup_model_name = "gemini-2.0-flash"
-
-    models_to_try = [model_name, backup_model_name]
+    last_error = ""
     
-    for model_target in models_to_try:
-        model = genai.GenerativeModel(model_target)
-        
-        # Retry Loop: Try up to 3 times per model
-        attempts = 0
-        while attempts < 3:
-            try:
-                if image_context:
-                    response = model.generate_content([system_prompt, image_context])
-                else:
-                    response = model.generate_content(system_prompt)
-                return response.text
-                
-            except Exception as e:
-                error_str = str(e)
-                
-                # CHECK FOR QUOTA ERROR (429)
-                if "429" in error_str or "Quota" in error_str:
-                    # Find the exact wait time in the error message
-                    # Example: "retry in 39.23 seconds"
-                    match = re.search(r"retry in (\d+)", error_str)
-                    
-                    if match:
-                        wait_seconds = int(match.group(1)) + 2 # Add 2s buffer
-                    else:
-                        wait_seconds = 10 # Default wait if parsing fails
-                    
-                    # STUBBORN WAIT: actually sleep the full time
-                    time.sleep(wait_seconds)
-                    attempts += 1
-                    continue # Loop back and try again!
-                
-                # If it's a 404 (Not Found), break loop and try next model
-                elif "404" in error_str:
-                    break
-                
-                else:
-                    # Unknown error? Wait 2s and retry
-                    time.sleep(2)
-                    attempts += 1
+    for model_name in model_ladder:
+        try:
+            model = genai.GenerativeModel(model_name)
+            if image_context:
+                response = model.generate_content([system_prompt, image_context])
+            else:
+                response = model.generate_content(system_prompt)
+            return response.text
+            
+        except Exception as e:
+            # If a model fails, we just try the next one instantly.
+            last_error = f"{model_name}: {str(e)}"
+            continue
 
-    return "⚠️ SYSTEM BUSY: Google is strictly rate-limiting right now. Please wait 2 minutes and try again."
+    return f"⚠️ SYSTEM ERROR: Could not connect to Google AI. Last error: {last_error}"
