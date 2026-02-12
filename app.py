@@ -5,8 +5,7 @@ import urllib.parse
 import re
 from datetime import datetime
 from src.brain import get_coo_response
-# Explicit import to prevent crashes
-from src.gcal import add_event_to_calendar, list_upcoming_events
+from src.gcal import add_event_to_calendar, list_upcoming_events, delete_event
 from src.utils import (
     load_memory, 
     log_mission_start, 
@@ -24,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS STYLING (The Clean Look) ---
+# --- CSS STYLING ---
 st.markdown("""
     <style>
     /* HIDE STREAMLIT BRANDING */
@@ -77,7 +76,7 @@ st.markdown("""
         border-top: 1px solid var(--secondary-background-color);
     }
     
-    /* Mobile Optimization for Map/Calendar Buttons */
+    /* Mobile Optimization */
     @media (max-width: 640px) {
         .stButton>button {
             height: 3rem;
@@ -139,10 +138,10 @@ with st.sidebar:
     # Calendar Status Indicator
     st.divider()
     calendar_status = list_upcoming_events()
-    if "Calendar Access: Not connected" in calendar_status:
-         st.caption("📅 Status: 🟡 Offline (Using Link Fallback)")
+    if "Not Connected" in calendar_status or "Error" in calendar_status:
+         st.caption("📅 Status: 🟡 Offline (Link Mode)")
     else:
-         st.caption("📅 Status: 🟢 Online (Reading Live Events)")
+         st.caption("📅 Status: 🟢 Online (Live Sync)")
 
     if st.button("Log Out"): 
         st.session_state.authenticated = False
@@ -244,8 +243,7 @@ if st.button(btn_label, type="primary"):
             st.session_state.chat_history
         )
         
-        # 4. PARSE RESPONSE
-        # Regex to find JSON object inside response text
+        # 4. ROBUST PARSING (Regex + Fallback)
         json_match = re.search(r'(\{.*\})', raw_response, re.DOTALL)
         
         try:
@@ -266,23 +264,23 @@ if st.button(btn_label, type="primary"):
                     # Conflict Warning
                     st.session_state.last_ai_question = None
                     st.session_state['result'] = f"⚠️ {data.get('text')}"
-                    st.session_state['pre_prep'] = None
-                    st.session_state['event_list'] = [] # Clear events on conflict
+                    # Don't clear events, keep them for reference
                     
-                elif data.get("type") in ["plan", "confirmation", "suggestion"]:
-                    # Success / Plan
+                elif data.get("type") in ["plan", "confirmation", "suggestion", "review"]:
+                    # Success / Plan / Review
                     st.session_state.last_ai_question = None
                     st.session_state['result'] = data.get("text")
                     st.session_state['pre_prep'] = data.get("pre_prep")
-                    st.session_state['event_list'] = data.get("events", [])
+                    if data.get("events"):
+                         st.session_state['event_list'] = data.get("events", [])
             else:
-                # Fallback for plain text response
+                # FALLBACK: If AI returned plain text (no JSON), just show it
                 st.session_state['result'] = raw_response
+                st.session_state.last_ai_question = None
                 
-        except json.JSONDecodeError:
+        except Exception as e:
             st.error("⚠️ System Error: Could not parse AI response.")
-            with st.expander("Debug Raw Output"):
-                st.code(raw_response)
+            st.code(raw_response)
 
 # --- RESULTS DISPLAY ---
 if st.session_state.get('result'):
@@ -316,19 +314,29 @@ if st.session_state.get('result'):
             # Action Buttons
             c1, c2 = st.columns([1, 1])
             with c1:
-                # Add to Calendar (API or Link Fallback)
-                if st.button("📅 Add to Calendar", key=f"add_{i}"):
-                    success, response = add_event_to_calendar(event)
-                    if success:
-                        st.toast(response) # API Success
-                        st.success(response)
-                    else:
-                        # Link Fallback
-                        st.error("Authentication incomplete. Use link:")
-                        st.markdown(f"[🔗 Click to Open Calendar]({response})")
-                    
-                    # Log mission start when adding
-                    log_mission_start(event)
+                # --- DYNAMIC BUTTON LOGIC ---
+                if event.get('id'):
+                    # CASE A: EVENT ALREADY EXISTS (HAS ID) -> SHOW "MARK AS DONE"
+                    if st.button("✅ Mark as Done", key=f"del_{i}"):
+                        success, msg = delete_event(event.get('id'))
+                        if success: 
+                            st.toast("Completed & Removed!")
+                            # Optional: Remove from list visually
+                            st.rerun()
+                        else: 
+                            st.error(msg)
+                else:
+                    # CASE B: NEW EVENT (NO ID) -> SHOW "ADD TO CALENDAR"
+                    if st.button("📅 Add to Calendar", key=f"add_{i}"):
+                        success, msg = add_event_to_calendar(event)
+                        if success:
+                            st.toast(msg) # API Success
+                            st.success(msg)
+                            log_mission_start(event)
+                        else:
+                            # Link Fallback
+                            st.error("Authentication incomplete. Use link:")
+                            st.markdown(f"[🔗 Click to Open Calendar]({msg})")
                 
             with c2:
                 # Map Link

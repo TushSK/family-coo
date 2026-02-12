@@ -52,5 +52,11 @@
         "mission": "Plan",
         "feedback": "If its gym the address is EOS fitness N Dale Mabry hwy",
         "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "You need to check last 3 event to see if anything is pending r completed",
+        "rating": "\ud83d\udc4e"
     }
 ]

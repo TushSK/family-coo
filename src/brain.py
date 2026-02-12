@@ -13,16 +13,14 @@ def encode_image(image):
 
 def get_coo_response(api_key, user_request, memory, calendar_data, pending_events, current_location, image_context=None, chat_history=None):
     """
-    The Conflict-Aware Brain.
-    Now checks 'pending_events' (plans from this session not yet saved) to prevent double-booking.
+    The 'Manager' Brain.
+    Supports ID tracking for deleting events and formatted Markdown outputs.
     """
     client = Groq(api_key=api_key)
     
-    # 1. TIME CONTEXT
     now = datetime.datetime.now()
     current_time_str = now.strftime("%A, %B %d, %Y")
     
-    # Cheat sheet for next 7 days
     cheat_sheet = "UPCOMING DATES:\n"
     for i in range(0, 8):
         d = now + datetime.timedelta(days=i)
@@ -30,44 +28,57 @@ def get_coo_response(api_key, user_request, memory, calendar_data, pending_event
 
     history_txt = ""
     if chat_history:
-        history_txt = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-5:]])
+        history_txt = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in chat_history[-10:]])
 
-    # 2. SYSTEM PROMPT
     system_prompt = f"""
     You are the Family COO. TODAY: {current_time_str}.
     
     {cheat_sheet}
     
-    REAL CALENDAR (Confirmed):
+    CALENDAR DATA (With IDs):
     {calendar_data}
     
-    PENDING PLANS (Just discussed, treat as busy):
+    ACTIVE PROPOSALS:
     {json.dumps(pending_events)}
     
-    MEMORY BANK:
-    {json.dumps(memory)}
+    HISTORY:
+    {history_txt}
     
     TASK: Analyze "{user_request}"
     
-    PROTOCOL:
-    1. **CONFLICT CHECK:** You MUST compare the request against BOTH 'REAL CALENDAR' and 'PENDING PLANS'.
-       - If overlap found: STOP. Use type "conflict". Suggest an alternative time.
-    2. **SMART SCHEDULING:** If user says "This Weekend", check Saturday AND Sunday. Pick the empty slot.
-    3. **OUTPUT JSON:** Return ONLY JSON.
+    RULES:
+    1. **FORMATTING:** Use Markdown for the 'text' field. Use bullet points for lists. Make it clean and readable.
+    2. **REVIEWING EVENTS:** If the user asks to review/check pending or past events:
+       - List them in the 'events' JSON array.
+       - **CRITICAL:** Include the 'id' field from the CALENDAR DATA so the App can provide a "Mark as Done" button.
+       
+    3. **CREATING EVENTS:** If creating new plans, do NOT include an 'id' field.
     
-    FORMAT EXAMPLES:
-    {{ "type": "question", "text": "Which location?" }}
+    4. **CONFLICTS:** Check for overlaps.
     
-    {{ "type": "plan", "text": "Scheduled.", "pre_prep": "Pack water.", "events": [ {{ "title": "Judo", "start_time": "...", "location": "..." }} ] }}
+    OUTPUT JSON EXAMPLES:
     
-    {{ "type": "conflict", "text": "⚠️ Conflict! You already have 'Beach Visit' planned for Saturday at 11 AM. \n\n💡 Suggestion: How about Sunday at 11 AM instead?" }}
+    (Reviewing Past):
+    {{
+      "type": "review",
+      "text": "### 📋 Pending Activities\\nI found these events from the last few days:\\n* **Judo** (Yesterday)\\n* **Beach** (Saturday)\\n\\nMark them as done below if completed.",
+      "events": [
+        {{ "title": "Judo", "start_time": "...", "location": "...", "id": "12345_from_calendar_data" }},
+        {{ "title": "Beach", "start_time": "...", "location": "...", "id": "67890_from_calendar_data" }}
+      ]
+    }}
+    
+    (Creating New):
+    {{
+      "type": "plan",
+      "text": "### ✅ Plan Ready\\nI have scheduled the movie.",
+      "pre_prep": "Buy tickets online.",
+      "events": [ {{ "title": "Movie", "start_time": "2026-02-14T11:00:00", "location": "Cinema" }} ]
+    }}
     """
 
-    messages = [
-        {"role": "system", "content": system_prompt}
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
 
-    # 3. PAYLOAD
     if image_context:
         model = "llama-3.2-90b-vision-preview"
         base64_image = encode_image(image_context)
@@ -82,15 +93,10 @@ def get_coo_response(api_key, user_request, memory, calendar_data, pending_event
         model = "llama-3.3-70b-versatile" 
         messages.append({"role": "user", "content": user_request})
 
-    # 4. EXECUTE
     try:
         completion = client.chat.completions.create(
             model=model, messages=messages, temperature=0.6, max_tokens=1024, stream=False
         )
-        text = completion.choices[0].message.content
-        match = re.search(r'(\{.*\})', text, re.DOTALL)
-        if match: return match.group(1)
-        return text
-
+        return completion.choices[0].message.content
     except Exception as e:
         return f'{{"type": "error", "text": "Groq Error: {str(e)}"}}'
