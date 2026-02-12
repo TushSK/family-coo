@@ -46,5 +46,11 @@
         "mission": "Plan",
         "feedback": "The time suggested overlaps with an already scheduled activity. Check my calendar first and then suggest",
         "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "If its gym the address is EOS fitness N Dale Mabry hwy",
+        "rating": "\ud83d\udc4e"
     }
 ]

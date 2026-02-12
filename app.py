@@ -128,7 +128,7 @@ with st.sidebar:
     # Calendar Status Indicator
     st.divider()
     calendar_status = list_upcoming_events()
-    if "Calendar Access: Not authenticated" in calendar_status:
+    if "Calendar Access: Not connected" in calendar_status:
          st.caption("📅 Status: 🟡 Offline (Using Link Fallback)")
     else:
          st.caption("📅 Status: 🟢 Online (Reading Live Events)")
@@ -306,15 +306,18 @@ if st.session_state.get('result'):
             c1, c2 = st.columns([1, 1])
             with c1:
                 # Add to Calendar (API or Link Fallback)
-                success, response = add_event_to_calendar(event)
-                if success:
-                    st.toast(response) # API Success
-                else:
-                    # Link Fallback
-                    st.link_button("📅 Add to Calendar", response)
+                if st.button("📅 Add to Calendar", key=f"add_{i}"):
+                    success, response = add_event_to_calendar(event)
+                    if success:
+                        st.toast(response) # API Success
+                        st.success(response)
+                    else:
+                        # Link Fallback
+                        st.error("Authentication incomplete. Use link:")
+                        st.markdown(f"[🔗 Click to Open Calendar]({response})")
                     
-                # Log mission start when adding
-                log_mission_start(event)
+                    # Log mission start when adding
+                    log_mission_start(event)
                 
             with c2:
                 # Map Link
