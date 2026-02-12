@@ -2,6 +2,7 @@ import os
 import urllib.parse
 from datetime import datetime, timedelta
 import json
+import streamlit as st  # Import streamlit to read secrets
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -10,45 +11,61 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 def get_calendar_service():
-    """Authenticates with Google. Auto-fixes corrupt tokens."""
+    """
+    Authenticates with Google Calendar.
+    Priority 1: Streamlit Cloud Secrets (Production)
+    Priority 2: Local token.json (Development)
+    """
     creds = None
-    token_file = 'token.json'
     
-    if os.path.exists(token_file):
+    # --- STRATEGY 1: CHECK STREAMLIT SECRETS (CLOUD) ---
+    if "token" in st.secrets and "google_token_json" in st.secrets["token"]:
         try:
-            if os.path.getsize(token_file) > 0:
-                creds = Credentials.from_authorized_user_file(token_file, SCOPES)
-            else:
-                os.remove(token_file)
-        except:
-            os.remove(token_file)
+            # Load the JSON string we pasted in Secrets
+            token_info = json.loads(st.secrets["token"]["google_token_json"])
+            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            
+            # Refresh if expired (Cloud mode)
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+        except Exception as e:
+            print(f"⚠️ Cloud Auth Error: {e}")
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try: creds.refresh(Request())
+    # --- STRATEGY 2: CHECK LOCAL FILE (DEVELOPMENT) ---
+    if not creds:
+        token_file = 'token.json'
+        if os.path.exists(token_file):
+            try:
+                if os.path.getsize(token_file) > 0:
+                    creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+                else:
+                    os.remove(token_file)
             except:
-                if os.path.exists(token_file): os.remove(token_file)
-                creds = None
-        
-        if not creds:
-            if os.path.exists('credentials.json'):
+                os.remove(token_file)
+
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                try: creds.refresh(Request())
+                except: creds = None
+            
+            # Only trigger browser flow if NOT on Cloud (Streamlit detects this via headless env)
+            if not creds and os.path.exists('credentials.json'):
                 try:
                     flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                    creds = flow.run_local_server(port=0)
+                    # Use a fixed port to avoid issues
+                    creds = flow.run_local_server(port=8080)
                     with open(token_file, 'w') as token: token.write(creds.to_json())
-                except Exception as e:
-                    print(f"❌ Login Failed: {e}"); return None
-            else: return None
-                
+                except Exception:
+                    return None
+
+    if not creds: return None
     return build('calendar', 'v3', credentials=creds)
 
 def list_upcoming_events():
-    """
-    Reads calendar with IDs for the Brain.
-    """
+    """Reads calendar (Past 10 days + Future 10 days)"""
     try:
         service = get_calendar_service()
-        if not service: return "Calendar Not Connected"
+        if not service: return "Calendar Not Connected (Auth Failed)"
         
         now = datetime.utcnow()
         past_start = (now - timedelta(days=10)).isoformat() + 'Z'
@@ -79,7 +96,7 @@ def list_upcoming_events():
     except Exception as e: return f"Read Error: {str(e)}"
 
 def delete_event(event_id):
-    """Deletes an event by ID (Mark as Done)"""
+    """Deletes an event by ID"""
     try:
         service = get_calendar_service()
         if service:
