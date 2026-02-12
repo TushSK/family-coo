@@ -5,7 +5,7 @@ import urllib.parse
 import re
 from datetime import datetime
 from src.brain import get_coo_response
-# FIX: Explicitly importing list_upcoming_events to prevent crash
+# Explicit import to prevent crashes
 from src.gcal import add_event_to_calendar, list_upcoming_events
 from src.utils import (
     load_memory, 
@@ -24,10 +24,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS STYLING ---
+# --- CSS STYLING (The Clean Look) ---
 st.markdown("""
     <style>
-    /* Hide Streamlit Branding */
+    /* HIDE STREAMLIT BRANDING */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
     .stAppDeployButton {display: none;}
     
     /* Bigger, Bold Buttons */
@@ -72,6 +75,14 @@ st.markdown("""
         margin-top: 20px;
         padding-top: 20px;
         border-top: 1px solid var(--secondary-background-color);
+    }
+    
+    /* Mobile Optimization for Map/Calendar Buttons */
+    @media (max-width: 640px) {
+        .stButton>button {
+            height: 3rem;
+            font-size: 0.9rem;
+        }
     }
     </style>
 """, unsafe_allow_html=True)
