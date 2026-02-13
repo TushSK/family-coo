@@ -2,7 +2,7 @@ import os
 import urllib.parse
 from datetime import datetime, timedelta
 import json
-import streamlit as st  # Import streamlit to read secrets
+import streamlit as st
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -11,61 +11,48 @@ from googleapiclient.discovery import build
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 def get_calendar_service():
-    """
-    Authenticates with Google Calendar.
-    Priority 1: Streamlit Cloud Secrets (Production)
-    Priority 2: Local token.json (Development)
-    """
+    """Authenticates with Google (Cloud Priority + Local Fallback)."""
     creds = None
     
-    # --- STRATEGY 1: CHECK STREAMLIT SECRETS (CLOUD) ---
+    # 1. CHECK CLOUD SECRETS
     if "token" in st.secrets and "google_token_json" in st.secrets["token"]:
         try:
-            # Load the JSON string we pasted in Secrets
             token_info = json.loads(st.secrets["token"]["google_token_json"])
             creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-            
-            # Refresh if expired (Cloud mode)
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
-        except Exception as e:
-            print(f"⚠️ Cloud Auth Error: {e}")
+        except Exception: pass
 
-    # --- STRATEGY 2: CHECK LOCAL FILE (DEVELOPMENT) ---
+    # 2. CHECK LOCAL FILE
     if not creds:
         token_file = 'token.json'
         if os.path.exists(token_file):
             try:
                 if os.path.getsize(token_file) > 0:
                     creds = Credentials.from_authorized_user_file(token_file, SCOPES)
-                else:
-                    os.remove(token_file)
-            except:
-                os.remove(token_file)
+                else: os.remove(token_file)
+            except: os.remove(token_file)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 try: creds.refresh(Request())
                 except: creds = None
             
-            # Only trigger browser flow if NOT on Cloud (Streamlit detects this via headless env)
             if not creds and os.path.exists('credentials.json'):
                 try:
                     flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                    # Use a fixed port to avoid issues
                     creds = flow.run_local_server(port=8080)
                     with open(token_file, 'w') as token: token.write(creds.to_json())
-                except Exception:
-                    return None
+                except Exception: return None
 
     if not creds: return None
     return build('calendar', 'v3', credentials=creds)
 
 def list_upcoming_events():
-    """Reads calendar (Past 10 days + Future 10 days)"""
+    """Reads calendar with IDs."""
     try:
         service = get_calendar_service()
-        if not service: return "Calendar Not Connected (Auth Failed)"
+        if not service: return "Calendar Not Connected"
         
         now = datetime.utcnow()
         past_start = (now - timedelta(days=10)).isoformat() + 'Z'
@@ -96,13 +83,17 @@ def list_upcoming_events():
     except Exception as e: return f"Read Error: {str(e)}"
 
 def delete_event(event_id):
-    """Deletes an event by ID"""
+    """Deletes event. Treats '410 Gone' as Success."""
     try:
         service = get_calendar_service()
         if service:
             service.events().delete(calendarId='primary', eventId=event_id).execute()
-            return True, "✅ Event marked as done (Deleted)"
+            return True, "✅ Deleted"
     except Exception as e:
+        # If Google says "Deleted" or "Not Found", that is a SUCCESS for us.
+        err_str = str(e).lower()
+        if "deleted" in err_str or "not found" in err_str or "410" in err_str or "404" in err_str:
+            return True, "✅ Already Deleted (Syncing...)"
         return False, f"Delete Failed: {str(e)}"
 
 def add_event_to_calendar(event):

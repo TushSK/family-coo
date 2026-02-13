@@ -58,5 +58,11 @@
         "mission": "Plan",
         "feedback": "You need to check last 3 event to see if anything is pending r completed",
         "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "it should check the context and then decide the location to be set on the map.",
+        "rating": "\ud83d\udc4e"
     }
 ]
