@@ -64,5 +64,23 @@
         "mission": "Plan",
         "feedback": "it should check the context and then decide the location to be set on the map.",
         "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-16",
+        "mission": "Test Missed Task",
+        "feedback": "User skipped this. Reason: Missed. Rescheduled. Note: Missed",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-16",
+        "mission": "Test Missed Task (Rescheduled) (Rescheduled)",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-16",
+        "mission": "Test Missed Task (Rescheduled) (Rescheduled)",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
     }
 ]

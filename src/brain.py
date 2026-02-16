@@ -45,13 +45,24 @@ def encode_image(image) -> str:
 def get_coo_response(
     api_key,
     user_request,
-    memory,
-    calendar_data,
-    pending_events,
-    current_location,
+    memory=None,
+    calendar_data=None,
+    pending_events=None,
+    current_location=None,
     image_context=None,
+    image_obj=None,          # ✅ alias used by flow.py
     chat_history=None,
 ):
+    # ✅ flow.py passes image_obj; keep backward compatibility
+    if image_context is None and image_obj is not None:
+        image_context = image_obj
+
+        # ✅ normalize None -> empty structures to avoid downstream crashes
+    memory = memory or []
+    calendar_data = calendar_data or []
+    pending_events = pending_events or []
+    chat_history = chat_history or []
+
     """
     Smart, timezone-aware brain.
 

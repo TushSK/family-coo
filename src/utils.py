@@ -1,149 +1,290 @@
+# src/utils.py
 import json
 import os
-import datetime
 import uuid
+import datetime as dt
+from typing import Any, Dict, List, Optional
+from dateutil import parser as dtparser
 
 MEMORY_FILE = "memory/feedback_log.json"
 MISSION_FILE = "memory/mission_log.json"
 
+
+# -----------------------
+# FILE BOOTSTRAP
+# -----------------------
 def init_files():
     """Ensures memory files exist."""
     if not os.path.exists("memory"):
-        os.makedirs("memory")
+        os.makedirs("memory", exist_ok=True)
     for fpath in [MEMORY_FILE, MISSION_FILE]:
         if not os.path.exists(fpath):
-            with open(fpath, "w") as f:
+            with open(fpath, "w", encoding="utf-8") as f:
                 json.dump([], f)
 
-def load_memory(limit=10):
-    """Loads actionable learnings for the Brain."""
+
+def _read_json(path: str) -> list:
     init_files()
     try:
-        with open(MEMORY_FILE, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data[-limit:] 
-    except:
+        return data if isinstance(data, list) else []
+    except Exception:
         return []
 
+
+def _write_json(path: str, data: list) -> None:
+    init_files()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
+
+
+# -----------------------
+# DATETIME HELPERS
+# -----------------------
+def _now_utc() -> dt.datetime:
+    """Timezone-aware current UTC time."""
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _parse_dt(value: Optional[str]) -> Optional[dt.datetime]:
+    """
+    Parse common Google Calendar formats into timezone-aware datetime (UTC).
+    Supports:
+      - "2026-02-15T12:30:00-05:00"
+      - "2026-02-15T17:30:00Z"
+      - "2026-02-15" (all-day)
+    """
+    if not value:
+        return None
+    try:
+        s = str(value).strip()
+
+        # ISO datetime
+        if "T" in s:
+            v = s.replace("Z", "+00:00")
+            dtx = dt.datetime.fromisoformat(v)
+            if dtx.tzinfo is None:
+                dtx = dtx.replace(tzinfo=dt.timezone.utc)
+            return dtx.astimezone(dt.timezone.utc)
+
+        # All-day date: treat as end-of-day UTC
+        d = dt.datetime.strptime(s, "%Y-%m-%d").date()
+        return dt.datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=dt.timezone.utc)
+    except Exception:
+        # Best-effort fallback with dateutil
+        try:
+            now_local = dt.datetime.now().astimezone()
+            dtx = dtparser.parse(str(value), fuzzy=True, default=now_local.replace(minute=0, second=0, microsecond=0))
+            if dtx.tzinfo is None:
+                dtx = dtx.replace(tzinfo=now_local.tzinfo)
+            return dtx.astimezone(dt.timezone.utc)
+        except Exception:
+            return None
+
+
+# -----------------------
+# MEMORY (BRAIN LEARNINGS)
+# -----------------------
+def load_memory(limit=10):
+    """Loads actionable learnings for the Brain."""
+    data = _read_json(MEMORY_FILE)
+    return data[-limit:]
+
+
+def load_feedback_rows() -> List[dict]:
+    """
+    Expected by flow.py.
+    Returns all feedback rows (oldest -> newest).
+    """
+    return _read_json(MEMORY_FILE)
+
+
+def save_manual_feedback(topic, feedback, rating):
+    """For manual corrections."""
+    entry = {
+        "timestamp": "Manual",
+        "mission": topic,
+        "feedback": feedback,
+        "rating": rating,
+    }
+    d = _read_json(MEMORY_FILE)
+    d.append(entry)
+    _write_json(MEMORY_FILE, d)
+
+
+# -----------------------
+# MISSIONS (FOLLOW-UP / MISSED EVENTS)
+# -----------------------
 def log_mission_start(event_data):
     """Logs a mission so we can check on it later."""
     init_files()
+
+    source_id = event_data.get("source_id") or event_data.get("id")
+    title = event_data.get("title") or event_data.get("summary") or "Event"
+
+    # Prefer end_time; fall back to end_raw (gcal events)
+    end_time_raw = event_data.get("end_time") or event_data.get("end_raw")
+
+    # Normalize end_time to timezone-aware ISO (UTC)
+    end_dt = _parse_dt(end_time_raw) if end_time_raw else None
+    end_time = end_dt.isoformat() if end_dt else end_time_raw
+
     new_mission = {
         "id": str(uuid.uuid4())[:8],
-        "title": event_data.get('title', 'Event'),
-        "end_time": event_data.get('end_time'), 
+        "source_id": source_id,
+        "title": title,
+        "end_time": end_time,
         "status": "pending",
-        "snoozed_until": None 
+        "snoozed_until": None,
     }
-    
-    try:
-        with open(MISSION_FILE, "r") as f:
-            data = json.load(f)
-    except:
-        data = []
-        
-    data.append(new_mission)
-    with open(MISSION_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+
+    missions = _read_json(MISSION_FILE)
+    missions.append(new_mission)
+    _write_json(MISSION_FILE, missions)
+
+    return new_mission
+
+
+def upsert_calendar_missions(events: List[Dict[str, Any]]) -> None:
+    """
+    Expected by flow.py.
+    Ensures calendar events are tracked as 'missions' for later feedback/missed checks.
+
+    events format (from gcal.py / flow.py):
+      - id
+      - title / summary
+      - end_raw (preferred) or end_time
+    """
+    if not events:
+        return
+
+    missions = _read_json(MISSION_FILE)
+    existing_source_ids = {m.get("source_id") for m in missions if m.get("source_id")}
+
+    changed = False
+    for ev in events:
+        source_id = ev.get("id") or ev.get("source_id")
+        if not source_id or source_id in existing_source_ids:
+            continue
+
+        end_raw = ev.get("end_raw") or ev.get("end_time")
+        end_dt = _parse_dt(end_raw)
+        if not end_dt:
+            continue
+
+        missions.append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "source_id": source_id,
+                "title": ev.get("title") or ev.get("summary") or "Event",
+                "end_time": end_dt.isoformat(),
+                "status": "pending",
+                "snoozed_until": None,
+            }
+        )
+        existing_source_ids.add(source_id)
+        changed = True
+
+    if changed:
+        _write_json(MISSION_FILE, missions)
+
 
 def get_pending_review():
-    """Finds ONE past event that needs feedback and isn't snoozed."""
-    init_files()
-    try:
-        with open(MISSION_FILE, "r") as f:
-            data = json.load(f)
-        
-        now = datetime.datetime.now().isoformat()
-        
-        # Sort by end_time so we ask about the oldest unfinished task first
-        data.sort(key=lambda x: x.get('end_time', ''))
+    """
+    Picks ONE missed (pending + past end_time + not snoozed) mission to ask about.
+    Returns mission dict or None.
+    """
+    missions = _read_json(MISSION_FILE)
+    now = _now_utc()
 
-        for mission in data:
-            if mission['status'] == 'pending':
-                # Check if event is actually over
-                if mission.get('end_time') and mission['end_time'] < now:
-                    # Check if snoozed
-                    snooze_time = mission.get('snoozed_until')
-                    if not snooze_time or snooze_time < now:
-                        return mission
-    except:
+    candidates = []
+    for m in missions:
+        if m.get("status") != "pending":
+            continue
+
+        end_dt = _parse_dt(m.get("end_time"))
+        if not end_dt or end_dt >= now:
+            continue
+
+        snooze_dt = _parse_dt(m.get("snoozed_until"))
+        if snooze_dt and snooze_dt >= now:
+            continue
+
+        candidates.append((end_dt, m))
+
+    if not candidates:
         return None
-    return None
+
+    # Most recent missed first
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def get_missed_count() -> int:
+    """
+    Expected by flow.py.
+    Counts how many missions are pending AND their end_time is in the past AND not snoozed.
+    """
+    missions = _read_json(MISSION_FILE)
+    now = _now_utc()
+    missed = 0
+
+    for m in missions:
+        if m.get("status") != "pending":
+            continue
+
+        end_dt = _parse_dt(m.get("end_time"))
+        if not end_dt or end_dt >= now:
+            continue
+
+        snooze_dt = _parse_dt(m.get("snoozed_until"))
+        if snooze_dt and snooze_dt >= now:
+            continue
+
+        missed += 1
+
+    return missed
+
 
 def snooze_mission(mission_id, hours=4):
     """Snoozes a mission so it doesn't annoy the user."""
-    init_files()
-    try:
-        with open(MISSION_FILE, "r") as f:
-            missions = json.load(f)
-    except:
-        return
+    missions = _read_json(MISSION_FILE)
 
-    wake_time = (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat()
-    
+    # Always store snooze_until as UTC ISO (timezone-aware)
+    wake_time = (_now_utc() + dt.timedelta(hours=hours)).isoformat()
+
     for m in missions:
-        if m['id'] == mission_id:
-            m['snoozed_until'] = wake_time
+        if m.get("id") == mission_id:
+            m["snoozed_until"] = wake_time
             break
-            
-    with open(MISSION_FILE, "w") as f:
-        json.dump(missions, f, indent=4)
+
+    _write_json(MISSION_FILE, missions)
+
 
 def complete_mission_review(mission_id, was_completed, reason):
     """Saves the feedback and closes the mission."""
-    init_files()
-    
-    # 1. Update Mission Log
-    try:
-        with open(MISSION_FILE, "r") as f:
-            missions = json.load(f)
-    except:
-        missions = []
-
+    missions = _read_json(MISSION_FILE)
     mission_title = "Unknown Mission"
+
     for m in missions:
-        if m['id'] == mission_id:
-            m['status'] = 'reviewed'
-            mission_title = m['title']
+        if m.get("id") == mission_id:
+            m["status"] = "reviewed"
+            mission_title = m.get("title", mission_title)
             break
-            
-    with open(MISSION_FILE, "w") as f:
-        json.dump(missions, f, indent=4)
-        
-    # 2. Update Brain Memory
+
+    _write_json(MISSION_FILE, missions)
+
     learning_entry = {
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d"),
+        "timestamp": _now_utc().astimezone().strftime("%Y-%m-%d"),
         "mission": mission_title,
         "feedback": f"User {'completed' if was_completed else 'skipped'} this. Reason: {reason}",
-        "rating": "👍" if was_completed else "👎"
+        "rating": "👍" if was_completed else "👎",
     }
-    
-    try:
-        with open(MEMORY_FILE, "r") as f:
-            memories = json.load(f)
-    except:
-        memories = []
-        
+
+    memories = _read_json(MEMORY_FILE)
     memories.append(learning_entry)
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(memories, f, indent=4)
-        
-def save_manual_feedback(topic, feedback, rating):
-    """For manual corrections."""
-    init_files()
-    entry = {
-        "timestamp": "Manual", 
-        "mission": topic, 
-        "feedback": feedback, 
-        "rating": rating
-    }
-    
-    try:
-        with open(MEMORY_FILE, "r") as f:
-            d = json.load(f)
-    except:
-        d = []
-    
-    d.append(entry)
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(d, f, indent=4)
+    _write_json(MEMORY_FILE, memories)
