@@ -40,6 +40,49 @@ from src.utils import (
 # -----------------------
 # 1. SESSION STATE
 # -----------------------
+
+def _get_query_user() -> str:
+    """Read persistent user from URL query params (survives Streamlit Cloud refresh)."""
+    try:
+        val = st.query_params.get("user", "")
+        if isinstance(val, list):
+            val = val[0] if val else ""
+        return (val or "").strip().lower()
+    except Exception:
+        try:
+            qp = st.experimental_get_query_params()
+            val = (qp.get("user") or [""])[0]
+            return (val or "").strip().lower()
+        except Exception:
+            return ""
+
+
+def _set_query_user(email: str) -> None:
+    """Persist user email in URL so backend can load tokens silently after refresh."""
+    email = (email or "").strip().lower()
+    if not email:
+        return
+    try:
+        st.query_params["user"] = email
+    except Exception:
+        try:
+            st.experimental_set_query_params(user=email)
+        except Exception:
+            pass
+
+
+def _clear_query_user() -> None:
+    """Remove persisted user from URL (optional)."""
+    try:
+        if "user" in st.query_params:
+            del st.query_params["user"]
+    except Exception:
+        try:
+            st.experimental_set_query_params()
+        except Exception:
+            pass
+
+
 def init_state():
     defaults = {
         "user_location": "Tampa, FL",
@@ -58,6 +101,13 @@ def init_state():
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
+
+    # Restore user_email from URL on fresh sessions (Streamlit Cloud refresh)
+    if not st.session_state.get("user_email"):
+        q_user = _get_query_user()
+        if q_user:
+            st.session_state.user_email = q_user
+
 
 # -----------------------
 # 2. LOGIC
@@ -197,10 +247,19 @@ def mark_missed(title, reason):
 def begin_reconnect(email):
     if email:
         st.session_state.user_email = email
+        _set_query_user(email)   # ✅ persist across refresh
     st.session_state.device_flow = start_device_flow()
+
 
 def clear_reconnect():
     st.session_state.device_flow = None
+    st.session_state.calendar_online = False
+    st.session_state.calendar_events = None
+    st.session_state.calendar_events_all = None
+    st.session_state.pending_events = []
+    st.session_state.user_email = ""
+    _clear_query_user()
+
 
 def complete_reconnect():
     flow = st.session_state.get("device_flow")
@@ -214,6 +273,7 @@ def complete_reconnect():
     ok, msg = save_token_from_device_flow(uid, token)
     if ok:
         st.session_state.device_flow = None
+        _set_query_user(uid)  # ✅ persist across refresh
         refresh_calendar(force_email=uid)
         return True, msg
     return False, msg
