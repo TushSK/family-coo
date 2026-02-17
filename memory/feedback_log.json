@@ -82,5 +82,11 @@
         "mission": "Test Missed Task (Rescheduled) (Rescheduled)",
         "feedback": "User completed this. Reason: Completed",
         "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-17",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
     }
 ]

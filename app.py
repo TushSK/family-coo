@@ -1,5 +1,6 @@
 # app.py
 import streamlit as st
+import time
 
 # UI only
 from src.ui import (
@@ -121,13 +122,36 @@ if not st.session_state.get("authenticated"):
 
         colA, colB = st.columns([1, 1], gap="small")
         with colA:
-            if st.button("Send OTP", type="primary", use_container_width=True):
+            # --- OTP cooldown (prevents Supabase 429) ---
+            if "otp_last_sent_ts" not in st.session_state:
+                st.session_state.otp_last_sent_ts = 0.0
+
+            COOLDOWN_SEC = 60
+            elapsed = time.time() - st.session_state.otp_last_sent_ts
+            seconds_left = max(0, int(COOLDOWN_SEC - elapsed))
+            can_send_otp = seconds_left <= 0
+
+            send_clicked = st.button(
+                "Send OTP",
+                type="primary",
+                use_container_width=True,
+                disabled=not can_send_otp,
+            )
+
+            if send_clicked:
                 ok, msg = supabase_send_otp(st, email)
                 if ok:
                     st.session_state.otp_sent = True
+                    st.session_state.otp_last_sent_ts = time.time()  # ✅ start cooldown after success
                     st.success(msg)
                 else:
+                    # If rate-limited, still apply cooldown to stop repeated clicks
+                    if "429" in str(msg) or "Too many requests" in str(msg).lower():
+                        st.session_state.otp_last_sent_ts = time.time()
                     st.error(msg)
+
+            if not can_send_otp:
+                st.caption(f"Please wait {seconds_left}s before requesting another code.")
 
         with colB:
             if st.button("Clear", use_container_width=True):
@@ -158,7 +182,6 @@ if not st.session_state.get("authenticated"):
                     st.rerun()
 
     st.stop()
-
 
 # -----------------------
 # CALENDAR AUTO-REFRESH (light touch)
