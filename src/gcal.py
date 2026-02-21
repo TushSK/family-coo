@@ -23,7 +23,12 @@ from googleapiclient.discovery import build
 
 from src.token_store import supabase_get_token, supabase_upsert_token
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/calendar",
+]
 
 GOOGLE_DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -234,6 +239,55 @@ def poll_device_flow(device_code: str, interval: int = 5) -> Dict[str, Any]:
             time.sleep(min(max(interval, 1), 5))
         except Exception:
             pass
+
+def extract_email_from_token_response(token_response: Dict[str, Any]) -> Optional[str]:
+    """
+    Extracts the signed-in Google account email from a device-flow token response.
+
+    Primary: decode `id_token` (JWT) -> payload.email
+    Fallback: call Google userinfo endpoint using access_token (requires openid/email/profile scopes)
+    """
+    try:
+        # 1) id_token path
+        id_token = token_response.get("id_token")
+        if id_token and isinstance(id_token, str) and "." in id_token:
+            import base64
+
+            parts = id_token.split(".")
+            if len(parts) >= 2:
+                payload_b64 = parts[1]
+                # base64url padding
+                payload_b64 += "=" * (-len(payload_b64) % 4)
+                payload = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+                import json
+
+                data = json.loads(payload)
+                email = (data.get("email") or "").strip().lower()
+                if email:
+                    return email
+
+        # 2) Fallback userinfo path
+        access_token = token_response.get("access_token")
+        if access_token:
+            import json
+            import urllib.request
+
+            req = urllib.request.Request(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read().decode("utf-8")
+            info = json.loads(body)
+            email = (info.get("email") or "").strip().lower()
+            return email or None
+
+    except Exception:
+        return None
+
+    return None
+
 
 
 def save_token_from_device_flow(user_id: str, token_response: Dict[str, Any]) -> Tuple[bool, str]:

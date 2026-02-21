@@ -98,7 +98,7 @@ def _clear_sid() -> None:
 
 
 # -----------------------
-# AUTH: Supabase OTP login
+# AUTH: Simple Email + PIN (no OTP, no Google)
 # -----------------------
 # 1) Try restore from sid (refresh-safe)
 if not st.session_state.get("authenticated"):
@@ -110,148 +110,94 @@ if not st.session_state.get("authenticated"):
             st.session_state.user_email = email
             st.session_state.authenticated = True
 
-# 2) If still not authenticated -> show login UI
+# 2) If still not authenticated -> show PIN login UI
 if not st.session_state.get("authenticated"):
-    import time  # do not assume
-    import re    # do not assume
-
     # init (NO new keys without init)
-    st.session_state.setdefault("otp_sent", False)
-    st.session_state.setdefault("otp_last_sent_ts", 0.0)
-    st.session_state.setdefault("otp_request_inflight", False)
-
-    # cooldown + block window
-    st.session_state.setdefault("otp_blocked_until_ts", 0.0)
-    # ✅ Normal (non-429) cooldown is 30 seconds
-    st.session_state.setdefault("otp_cooldown_sec", 30)
-
-    # safe clear flag
+    st.session_state.setdefault("login_email", "")
+    st.session_state.setdefault("login_pin", "")
+    st.session_state.setdefault("login_msg", "")
     st.session_state.setdefault("do_clear_login_widgets", False)
 
-    # If user clicked Clear last run, reset widget keys BEFORE creating widgets
+    # Safe clear (must happen before widgets render)
     if st.session_state.get("do_clear_login_widgets"):
         st.session_state["do_clear_login_widgets"] = False
         st.session_state["login_email"] = ""
-        st.session_state["login_code"] = ""
-        st.session_state["otp_sent"] = False
-        st.session_state["otp_request_inflight"] = False
-        st.session_state["otp_last_sent_ts"] = 0.0
-        st.session_state["otp_blocked_until_ts"] = 0.0
-        st.session_state["otp_cooldown_sec"] = 30
+        st.session_state["login_pin"] = ""
+        st.session_state["login_msg"] = ""
         _clear_sid()
 
     st.markdown("<br><br><h2 style='text-align:center;'>🏡 Family COO</h2>", unsafe_allow_html=True)
     st.markdown(
-        "<p style='text-align:center; color:#64748b;'>Log in with your email (OTP) to access your household calendar ✨</p>",
+        "<p style='text-align:center; color:#64748b;'>Log in with your email and PIN to access Family COO ✨</p>",
         unsafe_allow_html=True,
     )
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        with st.form("otp_login_form", clear_on_submit=False):
+        with st.form("pin_login_form", clear_on_submit=False):
             email = st.text_input("Email", placeholder="you@email.com", key="login_email")
-
-            now = time.time()
-
-            blocked_until = float(st.session_state.get("otp_blocked_until_ts") or 0.0)
-            block_left = max(0, int(blocked_until - now))
-
-            cooldown = int(st.session_state.get("otp_cooldown_sec") or 30)
-            elapsed = now - float(st.session_state.get("otp_last_sent_ts") or 0.0)
-            cooldown_left = max(0, int(cooldown - elapsed))
-
-            # effective timer (max of both protections)
-            seconds_left = max(block_left, cooldown_left)
-            can_send_otp = (seconds_left <= 0) and (not st.session_state.get("otp_request_inflight"))
+            pin = st.text_input("PIN", placeholder="Enter PIN", key="login_pin", type="password")
 
             colA, colB = st.columns([1, 1], gap="small")
             with colA:
-                send_submit = st.form_submit_button(
-                    "Send OTP",
-                    type="primary",
-                    use_container_width=True,
-                    disabled=not can_send_otp,
-                )
+                login_submit = st.form_submit_button("Login", type="primary", use_container_width=True)
             with colB:
                 clear_submit = st.form_submit_button("Clear", use_container_width=True)
 
-        # Clear (safe): set flag + rerun (do NOT modify widget keys here)
         if clear_submit:
             st.session_state["do_clear_login_widgets"] = True
             st.rerun()
 
-        # Live timer UI + smart auto-refresh tick (only when blocked/cooling)
-        if seconds_left > 0:
-            st.warning(f"OTP rate-limited or cooling down. Retry in **{seconds_left}s**.")
-            time.sleep(1)
-            st.rerun()
-
-        # Send OTP
-        if send_submit:
-            if not email or "@" not in email:
-                st.error("Enter a valid email.")
-            elif st.session_state.get("otp_request_inflight"):
-                st.warning("OTP request already in progress. Please wait…")
+        # Message banner
+        if st.session_state.get("login_msg"):
+            msg = st.session_state["login_msg"]
+            if "✅" in msg:
+                st.success(msg)
             else:
-                st.session_state.otp_request_inflight = True
-                ok, msg = supabase_send_otp(st, email)
-                st.session_state.otp_request_inflight = False
+                st.error(msg)
 
-                now2 = time.time()
+        if login_submit:
+            email_norm = (email or "").strip().lower()
+            pin_norm = (pin or "").strip()
 
-                if ok:
-                    st.session_state.otp_sent = True
-                    st.session_state.otp_last_sent_ts = now2
-                    st.session_state.otp_blocked_until_ts = 0.0
-                    # ✅ normal cooldown back to 30s
-                    st.session_state.otp_cooldown_sec = 30
-                    st.success(msg)
+            if not email_norm or "@" not in email_norm:
+                st.session_state["login_msg"] = "Enter a valid email."
+                st.rerun()
+
+            if not pin_norm:
+                st.session_state["login_msg"] = "Enter your PIN."
+                st.rerun()
+
+            # ✅ PIN config (simple + fool-proof)
+            # Supported:
+            # 1) st.secrets["auth"]["pin"] = "1234" (single PIN for all)
+            # 2) st.secrets["auth"]["pins"][email] = "1234" (per-user PIN)
+            auth = st.secrets.get("auth", {}) if hasattr(st, "secrets") else {}
+            global_pin = str(auth.get("pin", "") or "").strip()
+            pins_map = auth.get("pins", {}) or {}
+
+            expected = ""
+            if isinstance(pins_map, dict):
+                expected = str(pins_map.get(email_norm, "") or "").strip()
+
+            if (expected and pin_norm != expected) or (not expected and global_pin and pin_norm != global_pin) or (not expected and not global_pin):
+                if not expected and not global_pin:
+                    st.session_state["login_msg"] = "PIN auth is not configured. Add [auth] pin/pins in secrets.toml."
                 else:
-                    m = str(msg or "")
-                    m_low = m.lower()
+                    st.session_state["login_msg"] = "Invalid email or PIN."
+                st.rerun()
 
-                    # Default: keep normal 30s cooldown on any failure
-                    st.session_state.otp_last_sent_ts = now2
-                    st.session_state.otp_cooldown_sec = 30
+            # ✅ Login success: create app session + persist sid
+            sid = create_app_session(st, email_norm)
+            if not sid:
+                st.session_state["login_msg"] = "Could not create app session. Check Supabase REST permissions."
+                st.rerun()
 
-                    # ✅ If 429/rate limit: extract WAIT seconds correctly (ignore 429)
-                    if ("429" in m) or ("rate" in m_low) or ("limit" in m_low):
-                        nums = [int(n) for n in re.findall(r"\d+", m)]
-
-                        # If message contains 429 plus wait seconds, ignore 429 and pick a reasonable wait.
-                        # Prefer any value between 5 and 300; otherwise fallback to 180.
-                        candidates = [n for n in nums if n != 429 and 5 <= n <= 400]
-
-                        wait_s = 30
-                        if candidates:
-                            # pick the largest candidate (usually the real wait)
-                            wait_s = max(candidates)
-
-                        st.session_state.otp_blocked_until_ts = now2 + max(1, int(wait_s))
-                        # keep cooldown aligned with wait window so the max() timer is correct
-                        st.session_state.otp_cooldown_sec = max(30, int(wait_s))
-
-                    st.error(msg)
-
-        # Verify OTP
-        if st.session_state.get("otp_sent"):
-            code = st.text_input("OTP Code", placeholder="6-digit code", key="login_code")
-            if st.button("Verify & Continue", use_container_width=True):
-                ok, msg, sess = supabase_verify_otp(st, email, code)
-                if not ok:
-                    st.error(msg)
-                else:
-                    sid = create_app_session(st, email)
-                    if not sid:
-                        st.error("Could not create app session. Check Supabase REST permissions.")
-                        st.stop()
-
-                    _set_sid(sid)
-                    st.session_state.user_email = email.strip().lower()
-                    st.session_state.authenticated = True
-                    st.session_state.otp_sent = False
-                    st.success("✅ Logged in")
-                    st.rerun()
+            _set_sid(sid)
+            st.session_state.user_email = email_norm
+            st.session_state.authenticated = True
+            st.session_state["login_msg"] = "✅ Logged in"
+            st.rerun()
 
     st.stop()
 
