@@ -20,7 +20,7 @@
         "source_id": "70rj4opocopj0bb560qm2b9k69hj0b9ocosjcbb6c8s38d9j6kqjep9h6s",
         "title": "Review the Gym trainer contract. Need to give notice 30days prior",
         "end_time": "2026-02-17T15:00:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -28,7 +28,7 @@
         "source_id": "fee7s58g8td8flgfa96jip51fg",
         "title": "Family Outing: Build Your Own Hedgehog Magnet",
         "end_time": "2026-02-21T15:00:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -52,6 +52,30 @@
         "source_id": "ts7fm0pspviioosg4qb8e658u4",
         "title": "Test Missed Task (Rescheduled)",
         "end_time": "2026-02-17T20:00:00+00:00",
+        "status": "reviewed",
+        "snoozed_until": null
+    },
+    {
+        "id": "79f8ed7d",
+        "source_id": null,
+        "title": "Outing",
+        "end_time": "2026-02-20T00:00:00+00:00",
+        "status": "reviewed",
+        "snoozed_until": null
+    },
+    {
+        "id": "55777b31",
+        "source_id": "nhkbsd7p0t05vk0b2s73qfjlks",
+        "title": "Outing",
+        "end_time": "2026-02-20T00:00:00+00:00",
+        "status": "reviewed",
+        "snoozed_until": null
+    },
+    {
+        "id": "dacd0e7d",
+        "source_id": "6ksj8cpl70pj6b9lc8o6ab9k74o3cb9occs36bb474o3ccr4c4rmap1p60",
+        "title": "Drishti Appointment with Doctor",
+        "end_time": "2026-02-26T20:30:00+00:00",
         "status": "pending",
         "snoozed_until": null
     }

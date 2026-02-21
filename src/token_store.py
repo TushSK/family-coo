@@ -103,18 +103,47 @@ def supabase_upsert_token(st, user_id: str, token_json: dict, provider: str = "g
 # ------------------------------------------------------------
 # NEW: Supabase OTP login (email)
 # ------------------------------------------------------------
-def supabase_send_otp(st, email: str) -> tuple[bool, str]:
+def supabase_send_otp(st, email: str):
     """
-    Sends a 6-digit OTP to email via Supabase Auth.
-    Requires supabase.anon_key in secrets.
+    Sends OTP via Supabase Auth.
+    - Defensively initializes session_state keys
+    - Enforces per-email throttle (cooldown + post-429 backoff)
+    - Handles HTTP 429 gracefully
     """
+    import time
+    import json
+    import urllib.request
+    import urllib.error
+
     cfg = _supabase_cfg(st)
     if not cfg or not cfg.get("anon_key"):
         return False, "Missing Supabase anon_key in secrets."
 
     email = (email or "").strip().lower()
-    if not email:
+    if not email or "@" not in email:
         return False, "Enter a valid email."
+
+    # -----------------------------
+    # SAFE session_state init (dict-style)
+    # -----------------------------
+    if "otp_throttle" not in st.session_state:
+        st.session_state["otp_throttle"] = {}
+
+    throttle = st.session_state["otp_throttle"]
+    now = time.time()
+
+    # Block window after 429
+    blocked_until = float(throttle.get(f"{email}:blocked_until", 0.0) or 0.0)
+    if now < blocked_until:
+        wait_s = int(blocked_until - now)
+        return False, f"OTP rate-limited (429). Please wait {wait_s}s and try again."
+
+    # Minimum cooldown between sends (per email)
+    last_sent = float(throttle.get(f"{email}:last_sent", 0.0) or 0.0)
+    MIN_COOLDOWN_SEC = 60
+    if (now - last_sent) < MIN_COOLDOWN_SEC:
+        wait_s = int(MIN_COOLDOWN_SEC - (now - last_sent))
+        return False, f"Please wait {wait_s}s before requesting another OTP."
 
     url = f"{cfg['url']}/auth/v1/otp"
     payload = json.dumps({"email": email, "create_user": True}).encode("utf-8")
@@ -132,7 +161,31 @@ def supabase_send_otp(st, email: str) -> tuple[bool, str]:
 
     try:
         with urllib.request.urlopen(req, timeout=15):
+            throttle[f"{email}:last_sent"] = now
+            throttle[f"{email}:blocked_until"] = 0.0
             return True, "OTP sent. Check your email."
+    except urllib.error.HTTPError as e:
+        # Try reading body for helpful error text
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            body = ""
+
+        if int(getattr(e, "code", 0)) == 429:
+            # Use Retry-After if present; else safe backoff
+            retry_after = 0
+            try:
+                ra = e.headers.get("Retry-After")
+                if ra:
+                    retry_after = int(float(ra))
+            except Exception:
+                retry_after = 0
+
+            backoff = retry_after if retry_after > 0 else 180
+            throttle[f"{email}:blocked_until"] = now + backoff
+            return False, f"OTP rate-limited (429). Please wait {backoff}s and try again."
+
+        return False, f"OTP send failed: HTTP {getattr(e, 'code', 'ERR')} {body}".strip()
     except Exception as e:
         return False, f"OTP send failed: {str(e)}"
 

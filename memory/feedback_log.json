@@ -88,5 +88,41 @@
         "mission": "Judo class",
         "feedback": "User completed this. Reason: Completed",
         "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-17",
+        "mission": "Test Missed Task (Rescheduled)",
+        "feedback": "User skipped this. Reason: Missed. Deleted. Note: it was a test event created in calendar ignore",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-18",
+        "mission": "Review the Gym trainer contract. Need to give notice 30days prior",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-20",
+        "mission": "Outing",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-20",
+        "mission": "Outing",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-21",
+        "mission": "Family Outing: Build Your Own Hedgehog Magnet",
+        "feedback": "User skipped this. Reason: cancelled the plan for something else",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Family Outing: Build Your Own Hedgehog Magnet",
+        "feedback": "cancelled the plan for something else",
+        "rating": "\ud83d\udc4e"
     }
 ]

@@ -35,6 +35,7 @@ from src.utils import (
     get_pending_review,
     snooze_mission,
     complete_mission_review,
+    calculate_reliability_score
 )
 
 # -----------------------
@@ -97,6 +98,8 @@ def init_state():
         "device_flow": None,
         "plan_text": "",
         "authenticated": False,
+        "checkin_feedback_open": False,
+        "checkin_feedback_text": "",
         "show_camera": False
     }
     for k, v in defaults.items():
@@ -113,6 +116,10 @@ def init_state():
 # 2. LOGIC
 # -----------------------
 def execute_plan_logic(user_text: str, image_obj=None):
+    import json
+    import re
+    import streamlit as st
+
     memory = load_memory(limit=10)
     cal_events = st.session_state.get("calendar_events_all") or st.session_state.get("calendar_events")
 
@@ -123,6 +130,33 @@ def execute_plan_logic(user_text: str, image_obj=None):
         cal_str = human + "\nJSON:\n" + json.dumps(structured)
     else:
         cal_str = "Calendar Empty or Offline."
+
+    # ------------------------------------------------------------
+    # STRICT drafting gate:
+    # Draft ONLY when user explicitly uses schedule/add/plan (whole words).
+    # ------------------------------------------------------------
+    def _should_create_draft(text: str) -> bool:
+        t = (text or "").strip().lower()
+        if not t:
+            return False
+
+        # Never draft for questions
+        if "?" in t:
+            return False
+
+        question_prefixes = (
+            "what", "whats", "what's", "when", "show", "list", "tell me",
+            "do i", "did i", "am i", "any", "my upcoming", "upcoming schedule",
+            "next event", "next events",
+        )
+        if any(t.startswith(p) for p in question_prefixes):
+            return False
+
+        # Strict: only these explicit action words
+        explicit_actions = ("schedule", "add", "plan")
+        return any(re.search(rf"\\b{w}\\b", t) for w in explicit_actions)
+
+    schedule_intent = _should_create_draft(user_text)
 
     try:
         api_key = st.secrets["general"]["groq_api_key"]
@@ -154,9 +188,12 @@ def execute_plan_logic(user_text: str, image_obj=None):
 
     add_msg("assistant", resp_text)
 
+    # ✅ Only draft when strict scheduling intent is detected
     new_events = data.get("events", [])
-    if new_events:
+    if schedule_intent and new_events:
         st.session_state.pending_events = new_events
+    # else: ignore events (prevents Drafting from popping up on questions)
+
 
 def _extract_json(raw):
     if not raw:
@@ -278,17 +315,50 @@ def complete_reconnect():
         return True, msg
     return False, msg
 
-def compute_kpis():
+from datetime import datetime
+import streamlit as st
+
+from src.utils import load_feedback_rows, get_missed_count, calculate_reliability_score
+
+def compute_kpis(user_name: str = "Tushar"):
+    """
+    Returns a dict consumed by render_metrics().
+    """
+    now = datetime.now()
+    hour = now.hour
+    greeting = "Good Morning" if hour < 12 else ("Good Afternoon" if hour < 18 else "Good Evening")
+
+    # Calendar (weekly count) - keep it simple: if you already store upcoming 7 days in session, use that
+    events_week = st.session_state.get("calendar_events_week")
+    if events_week is None:
+        # fallback to whatever list you already store
+        events_week = st.session_state.get("calendar_events") or []
+
     try:
         rows = load_feedback_rows()
+    except Exception:
+        rows = []
+
+    try:
         missed = int(get_missed_count())
-    except:
-        rows, missed = [], 0
+    except Exception:
+        missed = 0
+
+    # NEW: Reliability KPI
+    try:
+        reliability = int(calculate_reliability_score())
+    except Exception:
+        reliability = 0
+
     return {
-        "date": datetime.now().strftime("%b %d"),
-        "upcoming": len(st.session_state.get("calendar_events") or []),
+        "name": user_name,
+        "greeting": greeting,
+        "header_date": now.strftime("%b %d, %Y"),
+        "date_label": now.strftime("%b %d"),
+        "upcoming_week": len(events_week),
         "learnings": len(rows),
-        "missed": missed
+        "missed": missed,
+        "reliability": reliability,
     }
 
 # -----------------------
@@ -324,15 +394,112 @@ def checkin_yes():
     st.session_state.checkin_pending_action = None
     add_msg("assistant", f"✅ Noted: '{mission.get('title','Item')}' completed.")
 
+def checkin_yes_learning():
+    """
+    YES => mark completed + add to learnings (memory file).
+    """
+    from src.utils import save_manual_feedback
+    mission, _mode = get_checkin_context()
+    if not mission:
+        return
+
+    note = "Completed"
+    complete_mission_review(mission["id"], True, note)
+
+    # ✅ add to learning
+    try:
+        save_manual_feedback(mission.get("title","Item"), "Completed as planned", "👍")
+    except Exception:
+        pass
+
+    st.session_state.checkin_pending_action = None
+    st.session_state.checkin_reason = ""
+    st.session_state.checkin_reschedule_when = ""
+    add_msg("assistant", f"✅ Noted: '{mission.get('title','Item')}' completed.")
+
+
 
 def checkin_no():
     mission, mode = get_checkin_context()
     if not mission:
         return
 
-    # Switch to action-mode (Reschedule / Delete)
-    st.session_state.checkin_pending_action = mission
-    add_msg("assistant", f"📝 Okay — '{mission.get('title','Item')}' looks missed. Reschedule or delete?")
+    # Open feedback mini-panel (instead of action-mode reschedule/delete)
+    st.session_state.checkin_pending_action = None
+    st.session_state.checkin_feedback_open = True
+    st.session_state.checkin_feedback_text = ""
+
+    add_msg("assistant", "📝 Quick note — what got in the way?")
+
+def checkin_no_with_feedback(feedback: str = ""):
+    """
+    NO => ask feedback in UI, then call this:
+      - mark missed
+      - add feedback to learnings (memory file)
+    """
+    from src.utils import save_manual_feedback
+    mission, _mode = get_checkin_context()
+    if not mission:
+        return
+
+    fb = (feedback or "").strip() or "Missed"
+    complete_mission_review(mission["id"], False, fb)
+
+    # ✅ add to learning
+    try:
+        save_manual_feedback(mission.get("title","Item"), fb, "👎")
+    except Exception:
+        pass
+
+    st.session_state.checkin_pending_action = None
+    st.session_state.checkin_reason = ""
+    st.session_state.checkin_reschedule_when = ""
+    add_msg("assistant", f"📝 Saved feedback for '{mission.get('title','Item')}'.")
+
+
+def checkin_submit_feedback():
+    mission, mode = get_checkin_context()
+    if not mission:
+        st.session_state.checkin_feedback_open = False
+        st.session_state.checkin_feedback_text = ""
+        return
+
+    fb = (st.session_state.get("checkin_feedback_text") or "").strip()
+    fb = fb if fb else "Skipped (no details provided)"
+
+    # Save as learning (missed)
+    complete_mission_review(mission["id"], False, fb)
+
+    # Close feedback UI + cleanup
+    st.session_state.checkin_feedback_open = False
+    st.session_state.checkin_feedback_text = ""
+    st.session_state.checkin_reason = ""
+    st.session_state.checkin_reschedule_when = ""
+    st.session_state.checkin_pending_action = None
+
+    add_msg("assistant", f"✅ Noted. I’ll learn from this: '{mission.get('title','Item')}'.")
+
+def checkin_submit_feedback():
+    mission, mode = get_checkin_context()
+    if not mission:
+        st.session_state.checkin_feedback_open = False
+        st.session_state.checkin_feedback_text = ""
+        return
+
+    fb = (st.session_state.get("checkin_feedback_text") or "").strip()
+    fb = fb if fb else "Skipped (no details provided)"
+
+    # Save learning entry (missed)
+    complete_mission_review(mission["id"], False, fb)
+
+    # Clear UI state
+    st.session_state.checkin_feedback_open = False
+    st.session_state.checkin_feedback_text = ""
+    st.session_state.checkin_reason = ""
+    st.session_state.checkin_reschedule_when = ""
+    st.session_state.checkin_pending_action = None
+
+    add_msg("assistant", f"✅ Noted. I’ll learn from this: '{mission.get('title','Item')}'.")
 
 
 def checkin_snooze(hours: int = 4):
@@ -493,3 +660,4 @@ def checkin_delete():
 def get_checkin_item():
     mission, _mode = get_checkin_context()
     return mission
+

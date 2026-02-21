@@ -288,3 +288,70 @@ def complete_mission_review(mission_id, was_completed, reason):
     memories = _read_json(MEMORY_FILE)
     memories.append(learning_entry)
     _write_json(MEMORY_FILE, memories)
+
+
+# ------------------------------------------------------------
+# Reliability KPI
+# ------------------------------------------------------------
+def calculate_reliability_score(memory_path=None) -> int:
+    """
+    Reliability score (0-100), simple + explainable:
+    - Read memory/log rows
+    - Count mission/check-in feedback items
+    - Reliability = % of non-failed items
+
+    If there is no history yet, return 100.
+    """
+    try:
+        mem = load_memory(memory_path) if memory_path else load_memory()
+    except Exception:
+        return 100
+
+    rows = []
+    if isinstance(mem, dict):
+        for k in ("memory", "rows", "items", "events", "log"):
+            v = mem.get(k)
+            if isinstance(v, list):
+                rows = v
+                break
+    elif isinstance(mem, list):
+        rows = mem
+
+    if not rows:
+        return 100
+
+    total = 0
+    failed = 0
+
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+
+        # Only consider explicit feedback-like rows to avoid noise
+        is_feedback = any(k in r for k in (
+            "mission_id", "mission", "checkin", "review", "completed", "result", "status", "rating"
+        ))
+        if not is_feedback:
+            continue
+
+        total += 1
+
+        if r.get("completed") is False:
+            failed += 1
+            continue
+
+        status = str(r.get("status") or r.get("result") or r.get("answer") or "").strip().lower()
+        if status in {"failed", "missed", "no", "not_done", "not done"}:
+            failed += 1
+            continue
+
+        rating = str(r.get("rating") or "").strip().lower()
+        if rating in {"👎", "no", "failed", "missed"}:
+            failed += 1
+            continue
+
+    if total <= 0:
+        return 100
+
+    score = round(((total - failed) / total) * 100)
+    return int(max(0, min(100, score)))
