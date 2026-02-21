@@ -827,25 +827,22 @@ def render_command_center(
     on_checkin_yes=None,
     on_checkin_no_with_feedback=None,
 ):
-    """
-    Layout_2.2 Hero Card (Parent-Child):
-      - Hero container (styled via CSS marker + :has())
-      - Nested Action Required strip (only if checkin_item exists)
-      - Body: Plan your day + textarea + buttons
-      - Footer: Train the Brain row
-    """
     import streamlit as st
 
-    # safe local UI state
     st.session_state.setdefault("checkin_feedback_open", False)
     st.session_state.setdefault("checkin_feedback_text", "")
 
-    # ✅ IMPORTANT: Use a real container (prevents breaking Streamlit columns)
+    # ✅ Safe deferred clear for plan_text (MUST happen BEFORE widget instantiation)
+    st.session_state.setdefault("plan_text", "")
+    st.session_state.setdefault("clear_plan_text", False)
+    if st.session_state.get("clear_plan_text"):
+        st.session_state["plan_text"] = ""
+        st.session_state["clear_plan_text"] = False
+
     with st.container():
-        # Marker used by CSS to style this entire container as the "Hero Card"
         st.markdown('<div class="coo-hero-marker"></div>', unsafe_allow_html=True)
 
-        # ====== Action Required strip (ONLY if checkin_item exists) ======
+        # ===== Action Required strip =====
         if checkin_item:
             title = (checkin_item.get("title") or "this item").strip()
             prompt = f'Did you complete "{title}"?'
@@ -853,7 +850,6 @@ def render_command_center(
             left, yes_col, no_col = st.columns([7, 1.3, 1.3], gap="small")
 
             with left:
-                # marker inside the strip for robust CSS targeting
                 st.markdown(
                     f"""
                     <div class="coo-smartstrip-left">
@@ -880,7 +876,6 @@ def render_command_center(
                     st.session_state.checkin_feedback_open = True
                     st.rerun()
 
-            # Inline feedback (inside hero card, below strip)
             if st.session_state.get("checkin_feedback_open"):
                 st.markdown('<div class="coo-checkin-feedback">', unsafe_allow_html=True)
                 st.markdown(
@@ -909,11 +904,8 @@ def render_command_center(
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        # ====== Body ======
-        st.markdown(
-            "<div class='coo-hero-title'>📝 Plan your day</div>",
-            unsafe_allow_html=True,
-        )
+        # ===== Body =====
+        st.markdown("<div class='coo-hero-title'>📝 Plan your day</div>", unsafe_allow_html=True)
 
         st.text_area(
             "",
@@ -929,17 +921,20 @@ def render_command_center(
                 if callable(toggle_camera_callback):
                     toggle_camera_callback()
                 st.rerun()
+
         with t2:
             if st.button("🔄 Reset", use_container_width=True):
-                st.session_state.plan_text = ""
+                # ✅ Defer clear; do NOT set plan_text directly here
+                st.session_state["clear_plan_text"] = True
                 st.rerun()
+
         with t3:
             if st.button("🚀 Execute", type="primary", use_container_width=True):
                 if callable(submit_callback):
                     submit_callback()
                 st.rerun()
 
-        # ====== Footer ======
+        # ===== Footer =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
 
         fL, fM, fR = st.columns([1.2, 3.6, 1.0], gap="small")
@@ -956,7 +951,6 @@ def render_command_center(
         with fR:
             if st.button("Save", use_container_width=True, key="brain_save"):
                 st.toast("Saved.")
-
 # ------------------------------------------------------------
 # RIGHT COLUMN (drafts + schedule)
 # ------------------------------------------------------------

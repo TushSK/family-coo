@@ -154,7 +154,9 @@ def execute_plan_logic(user_text: str, image_obj=None):
 
         # Strict: only these explicit action words
         explicit_actions = ("schedule", "add", "plan")
-        return any(re.search(rf"\\b{w}\\b", t) for w in explicit_actions)
+
+        # ✅ FIX: real word boundary regex
+        return any(re.search(rf"\b{w}\b", t) for w in explicit_actions)
 
     schedule_intent = _should_create_draft(user_text)
 
@@ -192,8 +194,6 @@ def execute_plan_logic(user_text: str, image_obj=None):
     new_events = data.get("events", [])
     if schedule_intent and new_events:
         st.session_state.pending_events = new_events
-    # else: ignore events (prevents Drafting from popping up on questions)
-
 
 def _extract_json(raw):
     if not raw:
@@ -213,21 +213,30 @@ def add_msg(role, content):
 # 3. CALLBACKS
 # -----------------------
 def submit_plan():
-    text = st.session_state.get("plan_text", "").strip()
+    import streamlit as st
+    from PIL import Image
+
+    st.session_state.setdefault("plan_text", "")
+    st.session_state.setdefault("show_camera", False)
+    st.session_state.setdefault("clear_plan_text", False)
+
+    text = (st.session_state.get("plan_text") or "").strip()
     cam_val = st.session_state.get("cam_input")
 
     img = None
     if st.session_state.get("show_camera") and cam_val:
         try:
             img = Image.open(cam_val)
-        except:
-            pass
+        except Exception:
+            img = None
 
     if not text and not img:
         return
 
     execute_plan_logic(text, image_obj=img)
-    st.session_state.plan_text = ""
+
+    # ✅ Defer clear to UI BEFORE widget is created
+    st.session_state["clear_plan_text"] = True
 
 def toggle_camera():
     st.session_state.show_camera = not st.session_state.get("show_camera", False)
