@@ -1,0 +1,11 @@
+[
+    {
+        "kind": "preference",
+        "key": "outing_style",
+        "value": "family fun",
+        "confidence": 0.82,
+        "notes": "",
+        "source": "brain_v23",
+        "ts_utc": "2026-02-24T03:20:12.704276+00:00"
+    }
+]

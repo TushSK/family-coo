@@ -189,6 +189,33 @@ def execute_plan_logic(user_text: str, image_obj=None):
         add_msg("user", "📷 [Scanned Image]")
 
     add_msg("assistant", resp_text)
+    uid = st.session_state.get("user_email")
+
+        # -----------------------------
+    # NEW: Memory write-back (Layer B per-user)
+    # Brain embeds tags in pre_prep like:
+    # [[MEMORY:{"kind":"preference","key":"outing_day","value":"Sunday","confidence":0.8}]]
+    # -----------------------------
+    try:
+        from src.utils import parse_memory_tags, append_user_memory_entry
+        uid = (st.session_state.get("user_email") or "").strip().lower()
+        tags = parse_memory_tags(data.get("pre_prep", ""))
+        for t in tags:
+            # allow only safe fields
+            entry = {
+                "kind": t.get("kind", "preference"),
+                "key": t.get("key", ""),
+                "value": t.get("value", ""),
+                "confidence": float(t.get("confidence", 0.7) or 0.7),
+                "notes": t.get("notes", ""),
+                "source": "brain_v23",
+            }
+            # Only write if key/value present
+            if entry["key"] and entry["value"] and uid:
+                append_user_memory_entry(uid, entry)
+    except Exception:
+        pass
+
 
     # ✅ Only draft when strict scheduling intent is detected
     new_events = data.get("events", [])
@@ -284,7 +311,8 @@ def reject_draft(ev):
     st.toast(f"Discarded '{ev.get('title')}'")
 
 def mark_missed(title, reason):
-    save_manual_feedback(title, reason, "👎")
+    uid = st.session_state.get("user_email")
+    save_manual_feedback(title, reason, "👎",user_id=uid)
     st.toast("Feedback saved.")
 
 # -----------------------
@@ -396,7 +424,8 @@ def checkin_yes():
         return
 
     note = (st.session_state.get("checkin_reason") or "").strip() or "Completed"
-    complete_mission_review(mission["id"], True, note)
+    uid = st.session_state.get("user_email")
+    complete_mission_review(mission["id"], True, note,user_id=uid)
 
     st.session_state.checkin_reason = ""
     st.session_state.checkin_reschedule_when = ""
@@ -417,7 +446,8 @@ def checkin_yes_learning():
 
     # ✅ add to learning
     try:
-        save_manual_feedback(mission.get("title","Item"), "Completed as planned", "👍")
+        uid = st.session_state.get("user_email")
+        save_manual_feedback(mission.get("title","Item"), "Completed as planned", "👍",user_id=uid)
     except Exception:
         pass
 
@@ -456,7 +486,8 @@ def checkin_no_with_feedback(feedback: str = ""):
 
     # ✅ add to learning
     try:
-        save_manual_feedback(mission.get("title","Item"), fb, "👎")
+        uid = st.session_state.get("user_email")
+        save_manual_feedback(mission.get("title","Item",user_id=uid), fb, "👎")
     except Exception:
         pass
 

@@ -829,15 +829,31 @@ def render_command_center(
 ):
     import streamlit as st
 
+    # --- Safe init ---
     st.session_state.setdefault("checkin_feedback_open", False)
     st.session_state.setdefault("checkin_feedback_text", "")
 
-    # ✅ Safe deferred clear for plan_text (MUST happen BEFORE widget instantiation)
-    st.session_state.setdefault("plan_text", "")
+    # ✅ Deferred clear flags
     st.session_state.setdefault("clear_plan_text", False)
+    st.session_state.setdefault("clear_conversation", False)
+
+    # Keys used by flow.py init_state()
+    st.session_state.setdefault("plan_text", "")
+    st.session_state.setdefault("chat_history", [])
+    st.session_state.setdefault("last_result_type", None)
+    st.session_state.setdefault("last_result_text", "")
+
+    # ✅ Clear BEFORE widget instantiation (mandatory rule)
     if st.session_state.get("clear_plan_text"):
         st.session_state["plan_text"] = ""
         st.session_state["clear_plan_text"] = False
+
+    # ✅ Clear conversation BEFORE rendering chat UI
+    if st.session_state.get("clear_conversation"):
+        st.session_state["chat_history"] = []
+        st.session_state["last_result_type"] = None
+        st.session_state["last_result_text"] = ""
+        st.session_state["clear_conversation"] = False
 
     with st.container():
         st.markdown('<div class="coo-hero-marker"></div>', unsafe_allow_html=True)
@@ -867,13 +883,13 @@ def render_command_center(
                 if st.button("Yes", key="coo_checkin_yes", type="primary", use_container_width=True):
                     if callable(on_checkin_yes):
                         on_checkin_yes()
-                    st.session_state.checkin_feedback_open = False
-                    st.session_state.checkin_feedback_text = ""
+                    st.session_state["checkin_feedback_open"] = False
+                    st.session_state["checkin_feedback_text"] = ""
                     st.rerun()
 
             with no_col:
                 if st.button("No", key="coo_checkin_no", use_container_width=True):
-                    st.session_state.checkin_feedback_open = True
+                    st.session_state["checkin_feedback_open"] = True
                     st.rerun()
 
             if st.session_state.get("checkin_feedback_open"):
@@ -894,17 +910,17 @@ def render_command_center(
                         txt = (st.session_state.get("checkin_feedback_text") or "").strip()
                         if callable(on_checkin_no_with_feedback):
                             on_checkin_no_with_feedback(txt)
-                        st.session_state.checkin_feedback_open = False
-                        st.session_state.checkin_feedback_text = ""
+                        st.session_state["checkin_feedback_open"] = False
+                        st.session_state["checkin_feedback_text"] = ""
                         st.rerun()
                 with f2:
                     if st.button("Cancel", key="coo_checkin_cancel", use_container_width=True):
-                        st.session_state.checkin_feedback_open = False
-                        st.session_state.checkin_feedback_text = ""
+                        st.session_state["checkin_feedback_open"] = False
+                        st.session_state["checkin_feedback_text"] = ""
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
-        # ===== Body =====
+        # ===== Input =====
         st.markdown("<div class='coo-hero-title'>📝 Plan your day</div>", unsafe_allow_html=True)
 
         st.text_area(
@@ -916,6 +932,7 @@ def render_command_center(
         )
 
         t1, t2, t3 = st.columns([1, 1, 1.4], gap="small")
+
         with t1:
             if st.button("📷 Scan", use_container_width=True):
                 if callable(toggle_camera_callback):
@@ -924,8 +941,9 @@ def render_command_center(
 
         with t2:
             if st.button("🔄 Reset", use_container_width=True):
-                # ✅ Defer clear; do NOT set plan_text directly here
+                # ✅ Deferred clear (no direct mutation of widget key here)
                 st.session_state["clear_plan_text"] = True
+                st.session_state["clear_conversation"] = True
                 st.rerun()
 
         with t3:
@@ -934,7 +952,26 @@ def render_command_center(
                     submit_callback()
                 st.rerun()
 
-        # ===== Footer =====
+        # ===== Conversation =====
+        st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div style='font-weight:900; font-size:14px; margin:6px 0 10px 0;'>💬 Conversation</div>",
+            unsafe_allow_html=True,
+        )
+
+        history = history or []
+        if not history:
+            st.info("No messages yet. Type something and click Execute.")
+        else:
+            for msg in history[-12:]:
+                role = (msg.get("role") or "assistant").strip().lower()
+                content = msg.get("content") or ""
+                if role not in ("user", "assistant"):
+                    role = "assistant"
+                with st.chat_message(role):
+                    st.write(content)
+
+        # ===== Train the Brain =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
 
         fL, fM, fR = st.columns([1.2, 3.6, 1.0], gap="small")

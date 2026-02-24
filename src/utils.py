@@ -3,12 +3,110 @@ import json
 import os
 import uuid
 import datetime as dt
+import re
 from typing import Any, Dict, List, Optional
 from dateutil import parser as dtparser
 
 MEMORY_FILE = "memory/feedback_log.json"
 MISSION_FILE = "memory/mission_log.json"
 
+
+# --- NEW: per-user memory folder (Layer B) ---
+USER_MEMORY_DIR = "memory/users"
+
+def _safe_user_key(user_id: str) -> str:
+    """
+    Convert user_id (email) into a safe filename.
+    Example: 'a.b+c@gmail.com' -> 'a_b_c_gmail_com'
+    """
+    s = (user_id or "").strip().lower()
+    if not s:
+        return "unknown_user"
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s or "unknown_user"
+
+def _user_memory_path(user_id: str) -> str:
+    init_files()
+    if not os.path.exists(USER_MEMORY_DIR):
+        os.makedirs(USER_MEMORY_DIR, exist_ok=True)
+    fname = _safe_user_key(user_id) + ".json"
+    return os.path.join(USER_MEMORY_DIR, fname)
+
+def load_user_memory(user_id: str, limit: int = 20) -> List[dict]:
+    """
+    Long-term memory (Layer B) per user.
+    Returns newest `limit` items.
+    """
+    path = _user_memory_path(user_id)
+    rows = _read_json(path)
+    return rows[-limit:] if limit and limit > 0 else rows
+
+def append_user_memory_entry(user_id: str, entry: Dict[str, Any], max_items: int = 2000) -> bool:
+    """
+    Append entry with simple dedupe.
+    Dedupe key: (kind, key, value) if present.
+    """
+    try:
+        if not user_id:
+            return False
+
+        path = _user_memory_path(user_id)
+        rows = _read_json(path)
+
+        if not isinstance(entry, dict):
+            return False
+
+        kind = str(entry.get("kind") or "").strip().lower()
+        key = str(entry.get("key") or "").strip().lower()
+        value = str(entry.get("value") or "").strip()
+
+        # Dedupe only if structured fields exist
+        if kind and key and value:
+            for r in reversed(rows[-200:]):  # small window is enough
+                if not isinstance(r, dict):
+                    continue
+                if (
+                    str(r.get("kind") or "").strip().lower() == kind
+                    and str(r.get("key") or "").strip().lower() == key
+                    and str(r.get("value") or "").strip() == value
+                ):
+                    return False  # already stored
+
+        # Stamp
+        entry.setdefault("ts_utc", _now_utc().isoformat())
+        entry.setdefault("source", "brain")
+
+        rows.append(entry)
+
+        # Cap file size
+        if max_items and len(rows) > max_items:
+            rows = rows[-max_items:]
+
+        _write_json(path, rows)
+        return True
+    except Exception:
+        return False
+
+def parse_memory_tags(pre_prep: str) -> List[dict]:
+    """
+    Extract [[MEMORY:{...json...}]] blocks from pre_prep.
+    Returns list of dict payloads.
+    """
+    out = []
+    s = str(pre_prep or "")
+    if not s:
+        return out
+
+    # non-greedy json capture
+    matches = re.findall(r"\[\[MEMORY:(\{.*?\})\]\]", s, flags=re.DOTALL)
+    for m in matches[:3]:  # hard cap
+        try:
+            payload = json.loads(m)
+            if isinstance(payload, dict):
+                out.append(payload)
+        except Exception:
+            continue
+    return out
 
 # -----------------------
 # FILE BOOTSTRAP
@@ -103,18 +201,19 @@ def load_feedback_rows() -> List[dict]:
     return _read_json(MEMORY_FILE)
 
 
-def save_manual_feedback(topic, feedback, rating):
-    """For manual corrections."""
+def save_manual_feedback(topic, feedback, rating, user_id=None):
     entry = {
         "timestamp": "Manual",
         "mission": topic,
         "feedback": feedback,
         "rating": rating,
     }
+    if user_id:
+        entry["user_id"] = str(user_id).strip().lower()
+
     d = _read_json(MEMORY_FILE)
     d.append(entry)
     _write_json(MEMORY_FILE, d)
-
 
 # -----------------------
 # MISSIONS (FOLLOW-UP / MISSED EVENTS)
@@ -265,7 +364,7 @@ def snooze_mission(mission_id, hours=4):
     _write_json(MISSION_FILE, missions)
 
 
-def complete_mission_review(mission_id, was_completed, reason):
+def complete_mission_review(mission_id, was_completed, reason, user_id=None):
     """Saves the feedback and closes the mission."""
     missions = _read_json(MISSION_FILE)
     mission_title = "Unknown Mission"
@@ -284,6 +383,8 @@ def complete_mission_review(mission_id, was_completed, reason):
         "feedback": f"User {'completed' if was_completed else 'skipped'} this. Reason: {reason}",
         "rating": "👍" if was_completed else "👎",
     }
+    if user_id:
+        learning_entry["user_id"]=str(user_id).strip().lower()
 
     memories = _read_json(MEMORY_FILE)
     memories.append(learning_entry)

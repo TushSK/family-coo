@@ -124,5 +124,21 @@
         "mission": "Family Outing: Build Your Own Hedgehog Magnet",
         "feedback": "cancelled the plan for something else",
         "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-23",
+        "user_id": "tushar@...",
+        "type": "memory_writeback",
+        "kind": "preference",
+        "key": "outing_style",
+        "value": "family fun",
+        "confidence": 0.82
+    },
+    {
+        "timestamp": "2026-02-23",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
     }
 ]
