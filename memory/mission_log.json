@@ -36,7 +36,7 @@
         "source_id": "15hiso3p6vboqj89cnjf3ovku8",
         "title": "Test Missed Task",
         "end_time": "2026-02-15T08:30:00-05:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -92,7 +92,7 @@
         "source_id": "4t01b0vq9ce510jkr26ujipm1k",
         "title": "Judo class",
         "end_time": "2026-02-23T23:30:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -100,7 +100,7 @@
         "source_id": null,
         "title": "Judo class",
         "end_time": "2026-02-24T23:30:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -108,6 +108,22 @@
         "source_id": "ehv12lg4hmcr4jdm1lb49it0u8",
         "title": "Judo class",
         "end_time": "2026-02-24T23:30:00+00:00",
+        "status": "reviewed",
+        "snoozed_until": null
+    },
+    {
+        "id": "fa018b64",
+        "source_id": null,
+        "title": "Florida Aquarium Visit",
+        "end_time": "2026-02-28T18:00:00+00:00",
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "831971d8",
+        "source_id": "lvdt2m0qo1ucbd8uk14noua66c",
+        "title": "Florida Aquarium Visit",
+        "end_time": "2026-02-28T18:00:00+00:00",
         "status": "pending",
         "snoozed_until": null
     }

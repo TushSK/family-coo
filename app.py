@@ -240,6 +240,9 @@ left, right = st.columns([2.2, 1.1], gap="large")
 from src.flow import checkin_yes_learning, checkin_no_with_feedback  # noqa: F401
 
 with left:
+    from src.flow import apply_deferred_ui_resets
+    apply_deferred_ui_resets()
+
     render_command_center(
         history=st.session_state.get("chat_history") or [],
         submit_callback=submit_plan,
@@ -248,6 +251,8 @@ with left:
         on_checkin_yes=checkin_yes,
         on_checkin_no_with_feedback=checkin_no_with_feedback,  # ✅ FIX
     )
+    from src.flow import process_train_brain_feedback
+    process_train_brain_feedback()
 
 with right:
     render_right_column(

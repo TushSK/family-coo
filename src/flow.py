@@ -57,7 +57,6 @@ def _get_query_user() -> str:
         except Exception:
             return ""
 
-
 def _set_query_user(email: str) -> None:
     """Persist user email in URL so backend can load tokens silently after refresh."""
     email = (email or "").strip().lower()
@@ -71,7 +70,6 @@ def _set_query_user(email: str) -> None:
         except Exception:
             pass
 
-
 def _clear_query_user() -> None:
     """Remove persisted user from URL (optional)."""
     try:
@@ -83,9 +81,10 @@ def _clear_query_user() -> None:
         except Exception:
             pass
 
-
 def init_state():
     defaults = {
+        "last_proactive_date": "",
+        "last_proactive_kind": "",
         "user_location": "Tampa, FL",
         "user_email": "",
         "calendar_online": False,
@@ -110,6 +109,67 @@ def init_state():
         q_user = _get_query_user()
         if q_user:
             st.session_state.user_email = q_user
+    run_proactive_checks(trigger="app_load")
+
+def run_proactive_checks(trigger: str = "app_load"):
+    """
+    Trigger-driven proactive help.
+    - Runs only when app loads or calendar refreshes.
+    - Runs at most once per day per user.
+    - Never schedules events. Only adds an assistant message.
+    """
+    uid = (st.session_state.get("user_email") or "").strip().lower()
+    if not uid:
+        return
+
+    # Only run when user is authenticated (prevents noise on login screen)
+    if not st.session_state.get("authenticated"):
+        return
+
+    today = datetime.now().astimezone().date().isoformat()
+    if st.session_state.get("last_proactive_date") == today:
+        return  # already ran today
+
+    # ---- Trigger 1: pending mission review ----
+    pending = get_pending_review()
+    if pending:
+        title = pending.get("title") or "a task"
+        add_msg("assistant", f"🔔 Action required: Did you complete “{title}”? Use **Yes/No** above.")
+        st.session_state.last_proactive_date = today
+        st.session_state.last_proactive_kind = "mission_checkin"
+        return
+
+    # ---- Trigger 2: daily suggestion (based on memory + day) ----
+    # Lightweight read of user memory (safe if function exists; otherwise skip)
+    pref_outing = ""
+    try:
+        from src.utils import load_user_memory
+        mem = load_user_memory(uid, limit=30)
+        for row in reversed(mem):
+            if (row.get("kind") == "preference") and (row.get("key") == "outing_style"):
+                pref_outing = str(row.get("value") or "")
+                break
+    except Exception:
+        pass
+
+    dow = datetime.now().astimezone().weekday()  # Mon=0 ... Sun=6
+    # Only nudge Thu/Fri/Sat/Sun (keeps it “triggered”, not spammy)
+    if dow in (3, 4, 5, 6):
+        if pref_outing:
+            add_msg(
+                "assistant",
+                f"💡 Quick suggestion: Want 3 {pref_outing} options for this weekend? "
+                f"Type: **plan weekend** (or tell me Sat/Sun + time)."
+            )
+        else:
+            add_msg(
+                "assistant",
+                "💡 Quick suggestion: Want 3 weekend outing ideas? Type: **plan weekend** "
+                "(or tell me Sat/Sun + time)."
+            )
+        st.session_state.last_proactive_date = today
+        st.session_state.last_proactive_kind = "daily_suggestion"
+        return
 
 
 # -----------------------
@@ -119,6 +179,9 @@ def execute_plan_logic(user_text: str, image_obj=None):
     import json
     import re
     import streamlit as st
+    # ✅ Idea Inbox capture (must happen before Brain call)
+    if handle_idea_inbox_capture(user_text):
+        return
 
     memory = load_memory(limit=10)
     cal_events = st.session_state.get("calendar_events_all") or st.session_state.get("calendar_events")
@@ -208,7 +271,7 @@ def execute_plan_logic(user_text: str, image_obj=None):
                 "value": t.get("value", ""),
                 "confidence": float(t.get("confidence", 0.7) or 0.7),
                 "notes": t.get("notes", ""),
-                "source": "brain_v23",
+                "source": "brain",
             }
             # Only write if key/value present
             if entry["key"] and entry["value"] and uid:
@@ -235,6 +298,106 @@ def add_msg(role, content):
     st.session_state.chat_history.append({"role": role, "content": content})
     if len(st.session_state.chat_history) > 15:
         st.session_state.chat_history = st.session_state.chat_history[-15:]
+
+def apply_deferred_ui_resets():
+    """
+    Applies deferred resets BEFORE widgets are instantiated.
+    Must be called early in app.py (before render_command_center).
+    """
+    import streamlit as st
+
+    if st.session_state.get("defer_train_brain_reset"):
+        # These keys are used by widgets; safe ONLY before widgets are created.
+        st.session_state["brain_correction"] = ""
+        st.session_state["brain_bad_response"] = False
+
+        # Clear the deferred flag
+        st.session_state["defer_train_brain_reset"] = False
+
+import re
+
+def _extract_idea_text(user_text: str) -> str | None:
+    if not user_text:
+        return None
+
+    # Accept: "idea: ...", "Idea: ...", "save idea: ...", "add idea: ..."
+    m = re.match(r"^\s*(idea|save idea|add idea)\s*:\s*(.+)\s*$", user_text, flags=re.IGNORECASE)
+    if not m:
+        return None
+    return (m.group(2) or "").strip() or None
+
+
+def handle_idea_inbox_capture(user_text: str) -> bool:
+    """
+    Returns True if we captured/saved an idea and injected a confirmation message.
+    Returns False if not an idea message (normal flow continues).
+    """
+    idea_text = _extract_idea_text(user_text)
+    if not idea_text:
+        return False
+
+    # Must have safe_email in session (your app already has this for memory)
+    safe_email = (st.session_state.get("safe_email") or "").strip()
+    if not safe_email:
+        # Fall back to user_email if that's what you store
+        safe_email = (st.session_state.get("user_email") or "").strip()
+        safe_email = safe_email.replace("@", "_").replace(".", "_")
+
+    try:
+        from src.utils import add_idea_to_inbox
+        item = add_idea_to_inbox(safe_email, idea_text, tags=["inbox"])
+        msg = f'✅ Saved to Ideas Inbox: "{item.get("text","")}"'
+    except Exception as e:
+        msg = f"⚠️ Could not save idea. ({e})"
+
+    # Inject assistant message into chat history (no UI change)
+    st.session_state["chat_history"] = st.session_state.get("chat_history") or []
+    st.session_state["chat_history"].append({"role": "user", "content": user_text})
+    st.session_state["chat_history"].append({"role": "assistant", "content": msg})
+
+    return True
+
+# -----------------------
+#  Train the Brain 
+# -----------------------
+def process_train_brain_feedback():
+    """
+    Train-the-Brain writeback:
+    - Triggered only when Save button is clicked (brain_save)
+    - Writes a learning row to memory/feedback_log.json via save_manual_feedback
+    - Uses deferred reset flag (no widget-key mutation after instantiation)
+    """
+    import streamlit as st
+    from src.utils import save_manual_feedback
+
+    # Save button click is a one-rerun trigger; don't reset the key manually.
+    if not st.session_state.get("brain_save"):
+        return
+
+    correction = (st.session_state.get("brain_correction") or "").strip()
+    bad = bool(st.session_state.get("brain_bad_response", False))
+    uid = (st.session_state.get("user_email") or "").strip().lower()
+
+    # If empty, just schedule a reset (optional) and exit
+    if not correction:
+        st.session_state["defer_train_brain_reset"] = True
+        return
+
+    try:
+        topic = "TrainBrain: Bad Response" if bad else "TrainBrain: Improvement"
+        rating = "👎" if bad else "👍"
+        save_manual_feedback(topic, correction, rating, user_id=uid)
+
+        # Mark KPI as dirty (optional, no UI changes required)
+        st.session_state["kpi_dirty"] = True
+
+    except Exception:
+        # Never crash app due to training feedback
+        pass
+    finally:
+        # Defer widget value resets to BEFORE UI instantiation on next run
+        st.session_state["defer_train_brain_reset"] = True
+
 
 # -----------------------
 # 3. CALLBACKS
@@ -290,6 +453,7 @@ def refresh_calendar(force_email=None):
             st.session_state.calendar_events_all = upcoming
     else:
         st.session_state.calendar_online = False
+run_proactive_checks("calendar_refresh")
 
 def add_to_calendar(ev):
     uid = st.session_state.get("user_email", "").strip().lower()

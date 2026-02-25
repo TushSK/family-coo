@@ -140,5 +140,46 @@
         "feedback": "User completed this. Reason: Completed",
         "rating": "\ud83d\udc4d",
         "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-23",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-23",
+        "mission": "Test Missed Task",
+        "feedback": "User skipped this. Reason: its a test meeting ignore it",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "TrainBrain: Bad Response",
+        "feedback": "I prefer outdoor activities and less travel, visit to some natural places",
+        "rating": "\ud83d\udc4e",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "TrainBrain: Bad Response",
+        "feedback": "I prefer outdoor activities and less travel, visit to some natural places",
+        "rating": "\ud83d\udc4e",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-24",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-24",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
     }
 ]

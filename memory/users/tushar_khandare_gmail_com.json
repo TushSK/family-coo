@@ -1,11 +1,99 @@
 [
     {
         "kind": "preference",
+        "key": "tone_response_style",
+        "value": "simple, straightforward, step-by-step; avoid clutter",
+        "confidence": 0.85,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "weekend_outing_style",
+        "value": "A/B/C options with quick decision framing",
+        "confidence": 0.8,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "food_preference",
+        "value": "Indian food preferred; South Indian breakfast on weekends",
+        "confidence": 0.8,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "diet_protein_preference",
+        "value": "light protein: plant sources and eggs",
+        "confidence": 0.75,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "outing_preferences",
+        "value": "beach: clean beaches; temple: nearby Thai temple; adventure: small/local",
+        "confidence": 0.7,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "pattern",
+        "key": "weekly_activity",
+        "value": "volleyball evenings 3-4 days/week",
+        "confidence": 0.75,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "pattern",
+        "key": "decision_friction",
+        "value": "user can overthink; prefers fewer choices and clear next step",
+        "confidence": 0.7,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "proactive_frequency",
+        "value": "at most once/day; avoid repeating same suggestion two days in a row",
+        "confidence": 0.85,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "scheduling_style",
+        "value": "ask max 1 tight follow-up if missing date/time; otherwise propose a plan",
+        "confidence": 0.8,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "pattern",
+        "key": "weekend_time_window",
+        "value": "prefers weekend morning for breakfast outings; evening for sports; nature outing",
+        "confidence": 0.65,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
+        "key": "avoid",
+        "value": "too many options; cluttered dashboards; long explanations",
+        "confidence": 0.75,
+        "source": "seed_cp24",
+        "ts_utc": "2026-02-24T00:00:00Z"
+    },
+    {
+        "kind": "preference",
         "key": "outing_style",
         "value": "family fun",
         "confidence": 0.82,
         "notes": "",
-        "source": "brain_v23",
-        "ts_utc": "2026-02-24T03:20:12.704276+00:00"
+        "source": "brain",
+        "ts_utc": "2026-02-24T17:34:20.582851+00:00"
     }
 ]

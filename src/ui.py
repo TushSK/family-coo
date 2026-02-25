@@ -924,7 +924,7 @@ def render_command_center(
         st.markdown("<div class='coo-hero-title'>📝 Plan your day</div>", unsafe_allow_html=True)
 
         st.text_area(
-            "",
+            "Command",
             key="plan_text",
             placeholder="e.g. 'Plan a movie night this Saturday at 7 PM...'",
             height=140,
@@ -980,7 +980,7 @@ def render_command_center(
             st.checkbox("Bad Response?", key="brain_bad_response")
         with fM:
             st.text_input(
-                "",
+                "Input",
                 key="brain_correction",
                 placeholder="Correction (e.g. 'Gym is closed Sundays')",
                 label_visibility="collapsed",

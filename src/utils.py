@@ -108,6 +108,36 @@ def parse_memory_tags(pre_prep: str) -> List[dict]:
             continue
     return out
 
+def get_memory_summary_from_memory(memory_list, n=12):
+    """
+    Latest-wins dedupe by key.
+    Returns list of {kind,key,value,confidence,ts_utc} (small + prompt-friendly).
+    No file I/O.
+    """
+    memory_list = memory_list or []
+    # sort newest first if ts_utc exists
+    def _ts(m): 
+        return m.get("ts_utc") or ""
+    items = sorted(memory_list, key=_ts, reverse=True)
+
+    seen = set()
+    out = []
+    for m in items:
+        key = (m.get("key") or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "kind": m.get("kind",""),
+            "key": key,
+            "value": m.get("value",""),
+            "confidence": m.get("confidence", 0.0),
+            "ts_utc": m.get("ts_utc","")
+        })
+        if len(out) >= n:
+            break
+    return out
+
 # -----------------------
 # FILE BOOTSTRAP
 # -----------------------
@@ -456,3 +486,75 @@ def calculate_reliability_score(memory_path=None) -> int:
 
     score = round(((total - failed) / total) * 100)
     return int(max(0, min(100, score)))
+
+# -----------------------------#
+    # Idea planner
+# -----------------------------#
+
+import os, json, hashlib
+from datetime import datetime, timezone
+
+def _utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def _ideas_path_for_user(safe_email: str) -> str:
+    return os.path.join("memory", "users", f"{safe_email}_ideas.json")
+
+def load_user_ideas(safe_email: str) -> list:
+    path = _ideas_path_for_user(safe_email)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def save_user_ideas(safe_email: str, ideas: list) -> None:
+    path = _ideas_path_for_user(safe_email)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(ideas, f, ensure_ascii=False, indent=2)
+
+def add_idea_to_inbox(
+    safe_email: str,
+    text: str,
+    tags: list | None = None,
+    source: str = "manual_inbox",
+    confidence: float = 0.75,
+) -> dict:
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Idea text is empty")
+
+    norm = " ".join(text.lower().split())
+    idea_id = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+
+    ideas = load_user_ideas(safe_email)
+
+    # Dedup: if same id exists, just refresh timestamp + keep active
+    for it in ideas:
+        if it.get("id") == idea_id:
+            it["ts_utc"] = _utc_now_iso()
+            it["status"] = it.get("status") or "active"
+            return it
+
+    item = {
+        "id": idea_id,
+        "text": text,
+        "tags": tags or [],
+        "status": "active",
+        "confidence": float(confidence),
+        "source": source,
+        "ts_utc": _utc_now_iso(),
+    }
+    ideas.insert(0, item)  # newest first
+    save_user_ideas(safe_email, ideas)
+    return item
+
+def get_ideas_summary(safe_email: str, n: int = 10) -> list:
+    ideas = load_user_ideas(safe_email)
+    # newest first, active only
+    active = [i for i in ideas if (i.get("status") or "active") == "active"]
+    return active[:max(1, int(n))]

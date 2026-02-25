@@ -267,6 +267,41 @@ def _ensure_event_schema(parsed: dict, user_request: str, now: datetime.datetime
     t = (parsed.get("type") or "").lower()
     events = parsed.get("events") or []
 
+        # ✅ If user used scheduling trigger but model didn't provide an event, force a proper question
+    # (We do not execute tools here; we just ensure we can create a draft event.)
+    if re.search(r"\b(schedule|add|plan)\b", user_request or "", flags=re.IGNORECASE):
+        if t not in ("plan", "conflict", "confirmation"):
+            parsed["type"] = "plan"
+            t = "plan"
+
+        if not isinstance(events, list) or len(events) == 0:
+            # Minimal safe fallback: ask ONE question if we cannot infer a start time
+            # (Keeps contract stable and avoids fake events with no time.)
+            inferred = _parse_tomorrow_time(user_request, now)
+            if inferred is None:
+                return {
+                    "type": "question",
+                    "text": "What time should I schedule this? (A) 9:00 AM (B) 9:30 AM (C) Other",
+                    "pre_prep": "Reply with A/B/C (or a time like '10:15 AM').",
+                    "events": []
+                }
+
+            # If we inferred a time (tomorrow pattern), create a minimal draft event
+            title = (parsed.get("text") or "").strip() or "Scheduled item"
+            return {
+                "type": "plan",
+                "text": "Got it — I can schedule that.",
+                "pre_prep": "Tip: add a location anytime if you want travel buffer suggestions.",
+                "events": [{
+                    "title": title[:80],
+                    "start_time": inferred.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "end_time": _default_end_time(inferred, 60).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "location": "",
+                    "description": ""
+                }]
+            }
+
+
     # Only enforce schema strictly when events are expected to be executable
     if t in ("plan", "conflict", "confirmation") and isinstance(events, list) and len(events) > 0:
         fixed_events = []
@@ -319,31 +354,102 @@ def _ensure_event_schema(parsed: dict, user_request: str, now: datetime.datetime
 
 def _is_weekend_outing_request(user_text: str) -> bool:
     t = (user_text or "").lower()
-    return any(k in t for k in ["weekend", "outing", "family fun", "something interesting", "plan"])
+
+    weekend_signals = ["weekend", "saturday", "sunday", "sat", "sun"]
+
+    # stronger intent coverage for your trick queries
+    activity_signals = [
+        "outing",
+        "suggest",
+        "ideas",
+        "plan",
+        "plans",
+        "fun",
+        "interesting",
+        "family",
+        "kids",
+        "visit",
+        "things to do",
+        "go out",
+        "what should we do",
+        "what do we do",
+    ]
+
+    return any(w in t for w in weekend_signals) and any(a in t for a in activity_signals)
 
 def _dead_end_output(parsed: dict) -> bool:
     if not isinstance(parsed, dict):
         return True
+
     t = (parsed.get("type") or "").lower()
     txt = (parsed.get("text") or "").strip()
+    low = txt.lower()
 
-    # dead: chat/confirmation with no question and very short
-    if t in ("chat", "confirmation") and ("?" not in txt) and len(txt) < 60:
+        # ✅ Enforce structured weekend response
+    # If this is a weekend outing request,
+    # we REQUIRE type="question" (A/B/C structured).
+    try:
+        if _is_weekend_outing_request(user_request) and t != "question":
+            return True
+    except Exception:
+        pass
+
+
+    # 1) Any "chat" that is basically a question is a dead-end for weekend flows
+    if t == "chat" and ("?" in txt) and len(txt) < 140:
         return True
 
-    # dead: question without A/B/C
+    # 2) Generic "mirror questions" are dead-ends
+    generic = [
+        "which schedule do you prefer",
+        "which activity would you like",
+        "what are your plans for the weekend",
+        "what would you like to do this weekend",
+    ]
+    if any(g in low for g in generic):
+        return True
+
+    # 3) If it's a weekend flow, we require A/B/C in a question
     if t == "question":
         if "(A)" not in txt or "(B)" not in txt or "(C)" not in txt:
             return True
 
+    # 4) Very short non-actionable outputs are dead-ends
+    if len(txt) < 40 and t in ("chat", "confirmation", "question"):
+        return True
+
     return False
 
 def _regen_dynamic_weekend_options(client, model: str, user_request: str, current_location: str, memory_dump: str) -> dict:
+    """
+    Weekend regen must be robust:
+    - Never crash on non-JSON
+    - Must return valid schema: {type,text,pre_prep,events}
+    - Must keep type="question" and events=[]
+    """
     ctx = {
         "user_request": user_request,
         "current_location": current_location,
         "memory_dump": memory_dump,
+        
     }
+
+    # ✅ Inject Ideas Inbox into regen context
+    try:
+        from src.utils import get_ideas_summary
+        import streamlit as st
+
+        safe_email = (st.session_state.get("safe_email") or "").strip()
+        if not safe_email:
+            safe_email = (st.session_state.get("user_email") or "").strip()
+            safe_email = safe_email.replace("@", "_").replace(".", "_")
+
+        ideas = get_ideas_summary(safe_email, n=10) if safe_email else []
+        ctx["ideas_dump"] = json.dumps(ideas, ensure_ascii=False)
+
+    except Exception:
+        ctx["ideas_dump"] = "[]"
+
     prompt = build_weekend_regen_prompt(ctx)
 
     completion = client.chat.completions.create(
@@ -353,9 +459,57 @@ def _regen_dynamic_weekend_options(client, model: str, user_request: str, curren
         max_tokens=700,
         stream=False,
     )
-    txt = (completion.choices[0].message.content or "").strip()
-    return json.loads(txt)
 
+    txt = (completion.choices[0].message.content or "").strip()
+
+    # Prefer your existing parser/repair utilities if present
+    try:
+        parsed = _try_parse_json(txt)
+        if parsed is None:
+            # One repair attempt using your existing repair path (if available)
+            try:
+                repaired = _repair_json_with_llm(client, model, txt)
+                parsed = _try_parse_json(repaired)
+            except Exception:
+                parsed = None
+
+        if not isinstance(parsed, dict):
+            raise ValueError("regen returned non-dict")
+
+        # Hard-enforce schema constraints for regen
+        parsed["type"] = "question"
+        parsed["events"] = []
+
+        # Ensure required fields exist
+        if "text" not in parsed or not isinstance(parsed.get("text"), str):
+            parsed["text"] = "Weekend outing — pick one:\n\n(A) Option A\n    Duration: 2 hours\n    Time window: 10:00 AM–12:00 PM\n\n(B) Option B\n    Duration: 2 hours\n    Time window: 12:00 PM–2:00 PM\n\n(C) Option C\n    Duration: 2 hours\n    Time window: 2:00 PM–4:00 PM\n\nReply exactly: schedule A / schedule B / schedule C\n(Optional: add Sat/Sun + adjust time window)"
+
+        if "pre_prep" not in parsed or not isinstance(parsed.get("pre_prep"), str):
+            parsed["pre_prep"] = "Tip: reply with schedule A/B/C and add Sat/Sun + time window if you want."
+
+        return parsed
+
+    except Exception:
+        # Absolute last-resort safe fallback (never break the app)
+        return {
+            "type": "question",
+            "text": (
+                "Weekend outing — pick one:\n\n"
+                "(A) Local park outing\n"
+                "    Duration: 2 hours\n"
+                "    Time window: 10:00 AM–12:00 PM\n\n"
+                "(B) Museum visit\n"
+                "    Duration: 2 hours\n"
+                "    Time window: 12:00 PM–2:00 PM\n\n"
+                "(C) Riverwalk stroll\n"
+                "    Duration: 2 hours\n"
+                "    Time window: 2:00 PM–4:00 PM\n\n"
+                "Reply exactly: schedule A / schedule B / schedule C\n"
+                "(Optional: add Sat/Sun + adjust time window)"
+            ),
+            "pre_prep": "Tip: include a preferred neighborhood or max drive time for better suggestions.",
+            "events": [],
+        }
 
 def get_coo_response(
     api_key,
@@ -549,6 +703,27 @@ def get_coo_response(
         "continuation_hint": continuation_hint,
         "user_request": user_request,
     }
+    # ✅ ADD THIS BLOCK RIGHT HERE
+    try:
+        from src.utils import get_memory_summary_for_user
+        from src.utils import get_memory_summary_from_memory
+        from src.utils import get_ideas_summary
+        safe_email = (ctx.get("safe_email") or "").strip()  # if you have it
+        if safe_email:
+            safe_email = (ctx.get("user_email") or "").strip()
+            safe_email = safe_email.replace("@", "_").replace(".", "_")
+
+            ctx["ideas_summary"] = get_ideas_summary(safe_email, n=10) if safe_email else []
+        else:
+            ctx["ideas_summary"] = []
+           
+        # If you have email available in brain, use it:
+        # ctx["memory_summary"] = get_memory_summary_for_user(user_email, n=12)
+        # If you DON'T have email here (likely), use a summary-from-memory-list function instead (recommended):
+        ctx["memory_summary"] = get_memory_summary_from_memory(memory, n=12)
+    except Exception:
+        ctx["memory_summary"] = []
+
     system_prompt = build_system_prompt(ctx)
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -581,12 +756,26 @@ def get_coo_response(
     text = (completion.choices[0].message.content or "").strip()
 
     parsed = _try_parse_json(text)
-    if parsed is not None:
-        if _is_weekend_outing_request(user_request) and _dead_end_output(parsed):
-            # regenerate dynamic options once (no dead-ends)
-            regen = _regen_dynamic_weekend_options(client, model, user_request, current_location, memory_dump)
-            return json.dumps(regen, ensure_ascii=False)
+
+    # ✅ Only proceed if parsed is a dict
+    if isinstance(parsed, dict):
+        parsed = _ensure_event_schema(parsed, user_request, now)
+
+        # (optional) weekend normalization logic here — safe now
+        if _is_weekend_outing_request(user_request):
+            t = (parsed.get("type") or "").lower()
+            txt = (parsed.get("text") or "")
+
+            has_abc = ("(A)" in txt and "(B)" in txt and "(C)" in txt)
+            has_template = ("Weekend outing — pick one:" in txt and "Duration:" in txt and "Time window:" in txt)
+
+            if t != "question" or (not has_abc) or (not has_template):
+                regen = _regen_dynamic_weekend_options(client, model, user_request, current_location, memory_dump)
+                return json.dumps(regen, ensure_ascii=False)
+
         return json.dumps(parsed, ensure_ascii=False)
+
+    # ✅ If parsed is None or not dict, fall through to repair path (existing logic)
 
     # One repair attempt
     try:
