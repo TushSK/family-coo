@@ -95,5 +95,41 @@
         "notes": "",
         "source": "brain",
         "ts_utc": "2026-02-24T17:34:20.582851+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outing_style",
+        "value": "family_fun",
+        "confidence": 0.82,
+        "notes": "",
+        "source": "brain",
+        "ts_utc": "2026-02-25T02:37:57.625903+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor activities",
+        "value": "hiking",
+        "confidence": 0.8,
+        "notes": "User showed interest in Hillsborough River State Park Hike",
+        "source": "brain",
+        "ts_utc": "2026-02-26T00:11:50.625077+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor activities",
+        "value": "Sunday",
+        "confidence": 0.8,
+        "notes": "user asked about Sunday plans",
+        "source": "brain",
+        "ts_utc": "2026-02-26T00:25:40.791816+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "day",
+        "value": "Sunday",
+        "confidence": 1.0,
+        "notes": "",
+        "source": "brain",
+        "ts_utc": "2026-02-26T00:26:19.497202+00:00"
     }
 ]

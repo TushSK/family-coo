@@ -181,5 +181,19 @@
         "feedback": "User completed this. Reason: Completed",
         "rating": "\ud83d\udc4d",
         "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "TrainBrain: Bad Response",
+        "feedback": "Next time provide the timing of the activities along with the location. Do not ask both separately",
+        "rating": "\ud83d\udc4e",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-27",
+        "mission": "Drishti Appointment with Doctor",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
     }
 ]

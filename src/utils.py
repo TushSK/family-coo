@@ -25,6 +25,13 @@ def _safe_user_key(user_id: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
     return s or "unknown_user"
 
+def safe_email_from_user(user_id: str) -> str:
+    """
+    Public helper: convert email/user_id into a safe filename key.
+    This is a stable wrapper around _safe_user_key.
+    """
+    return _safe_user_key(user_id)
+
 def _user_memory_path(user_id: str) -> str:
     init_files()
     if not os.path.exists(USER_MEMORY_DIR):
@@ -517,6 +524,10 @@ def save_user_ideas(safe_email: str, ideas: list) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(ideas, f, ensure_ascii=False, indent=2)
 
+
+# ###############################################
+# Add ideas to the inbox
+# ###############################################
 def add_idea_to_inbox(
     safe_email: str,
     text: str,
@@ -558,3 +569,78 @@ def get_ideas_summary(safe_email: str, n: int = 10) -> list:
     # newest first, active only
     active = [i for i in ideas if (i.get("status") or "active") == "active"]
     return active[:max(1, int(n))]
+
+# ###############################################
+# Improvement 1: Contextual Matching (Very Powerful)
+# ###############################################
+import re
+
+def select_relevant_ideas(ideas: list, user_request: str, n: int = 6) -> list:
+    """
+    Lightweight lexical matcher (safe + deterministic).
+    Returns top-n ideas sorted by score (desc).
+    Does not mutate stored ideas.
+    """
+    t = " ".join((user_request or "").lower().split())
+
+    # Extract simple intent signals
+    wants_short = bool(re.search(r"\b(short|quick|brief|1-2 hours|couple hours)\b", t))
+    wants_outdoor = bool(re.search(r"\b(outdoor|outside|park|trail|beach|river|lake|kayak|kayaking|walk)\b", t))
+    wants_indoor = bool(re.search(r"\b(indoor|inside|museum|mall|movie|bowling|aquarium)\b", t))
+    mentions_sun = bool(re.search(r"\b(sunday|sun)\b", t))
+    mentions_sat = bool(re.search(r"\b(saturday|sat)\b", t))
+    mentions_afternoon = bool(re.search(r"\b(afternoon|2pm|3pm|4pm)\b", t))
+    mentions_morning = bool(re.search(r"\b(morning|8am|9am|10am|breakfast)\b", t))
+
+    # Keywords from request for overlap scoring
+    req_tokens = set([w for w in re.findall(r"[a-z0-9]+", t) if len(w) >= 3])
+
+    def score_item(it: dict) -> float:
+        text = " ".join(((it.get("text") or "") + " " + " ".join(it.get("tags") or [])).lower().split())
+        tokens = set([w for w in re.findall(r"[a-z0-9]+", text) if len(w) >= 3])
+
+        overlap = len(req_tokens.intersection(tokens))
+        s = overlap * 2.0
+
+        # Light boosts
+        if wants_outdoor and any(k in text for k in ["park", "trail", "beach", "river", "lake", "kayak", "kayaking", "outdoor"]):
+            s += 2.0
+        if wants_indoor and any(k in text for k in ["museum", "aquarium", "mall", "movie", "indoor"]):
+            s += 2.0
+        if wants_short and any(k in text for k in ["quick", "short", "nearby", "close"]):
+            s += 1.0
+
+        # Time-of-day hints (very light; we don’t store durations yet)
+        if mentions_morning and "breakfast" in text:
+            s += 1.0
+        if mentions_afternoon and any(k in text for k in ["stroll", "walk", "visit", "outing"]):
+            s += 0.5
+
+        # If user explicitly says indoor, penalize strongly-outdoor activities
+        if wants_indoor and any(k in text for k in ["kayak", "kayaking", "beach", "trail"]):
+            s -= 2.0
+
+        # Small bump for “active” and confidence (if present)
+        conf = float(it.get("confidence") or 0.0)
+        s += min(conf, 1.0) * 0.25
+
+        return s
+
+    scored = []
+    for it in ideas or []:
+        try:
+            if (it.get("status") or "active") != "active":
+                continue
+            scored.append((score_item(it), it))
+        except Exception:
+            continue
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = [it for s, it in scored if s > 0][:max(1, int(n))]
+
+    # Fallback: if nothing scored, just return newest active
+    if not top:
+        active = [i for i in ideas or [] if (i.get("status") or "active") == "active"]
+        return active[:max(1, int(n))]
+
+    return top

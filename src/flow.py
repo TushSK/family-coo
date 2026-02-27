@@ -171,6 +171,40 @@ def run_proactive_checks(trigger: str = "app_load"):
         st.session_state.last_proactive_kind = "daily_suggestion"
         return
 
+def _extract_json(raw):
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        try:
+            m = re.search(r"(\{.*\})", raw, re.DOTALL)
+            if not m:
+                return None
+            obj = json.loads(m.group(1))
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+def _extract_options_json(pre_prep: str):
+    import json, re
+    if not pre_prep or not isinstance(pre_prep, str):
+        return None
+    m = re.search(r"OPTIONS_JSON\s*=\s*(\[[\s\S]*\])", pre_prep)
+    if not m:
+        return None
+    try:
+        arr = json.loads(m.group(1))
+        return arr if isinstance(arr, list) else None
+    except Exception:
+        return None
+
+def _extract_schedule_choice(text: str) -> str:
+    import re
+    t = (text or "").strip().lower()
+    m = re.fullmatch(r"(schedule|plan|add)\s+([abc])", t)
+    return m.group(2).upper() if m else ""
 
 # -----------------------
 # 2. LOGIC
@@ -179,6 +213,7 @@ def execute_plan_logic(user_text: str, image_obj=None):
     import json
     import re
     import streamlit as st
+
     # ✅ Idea Inbox capture (must happen before Brain call)
     if handle_idea_inbox_capture(user_text):
         return
@@ -190,13 +225,12 @@ def execute_plan_logic(user_text: str, image_obj=None):
         lines = [f"- {e.get('start_friendly','')}: {e.get('title','')}" for e in cal_events]
         human = "SCHEDULE (Next 7 Days):\n" + "\n".join(lines)
         structured = [{"title": e.get("title"), "start": e.get("start_raw"), "end": e.get("end_raw")} for e in cal_events]
-        cal_str = human + "\nJSON:\n" + json.dumps(structured)
+        cal_str = human + "\nJSON:\n" + json.dumps(structured, ensure_ascii=False)
     else:
         cal_str = "Calendar Empty or Offline."
 
     # ------------------------------------------------------------
-    # STRICT drafting gate:
-    # Draft ONLY when user explicitly uses schedule/add/plan (whole words).
+    # STRICT drafting gate: ONLY schedule/add/plan (whole words).
     # ------------------------------------------------------------
     def _should_create_draft(text: str) -> bool:
         t = (text or "").strip().lower()
@@ -215,11 +249,7 @@ def execute_plan_logic(user_text: str, image_obj=None):
         if any(t.startswith(p) for p in question_prefixes):
             return False
 
-        # Strict: only these explicit action words
-        explicit_actions = ("schedule", "add", "plan")
-
-        # ✅ FIX: real word boundary regex
-        return any(re.search(rf"\b{w}\b", t) for w in explicit_actions)
+        return bool(re.search(r"\b(schedule|add|plan)\b", t))
 
     schedule_intent = _should_create_draft(user_text)
 
@@ -229,6 +259,50 @@ def execute_plan_logic(user_text: str, image_obj=None):
         add_msg("assistant", "⛔ Error: Missing 'groq_api_key' in secrets.toml.")
         return
 
+    # -----------------------------
+    # Contextual Matching: inject relevant ideas (flow -> brain)
+    # Standard keys:
+    # - ideas_summary: list[dict] prompt-safe
+    # - ideas_dump:    json string (debug/backward compatible)
+    # -----------------------------
+    ideas_summary = []
+    ideas_dump = "[]"
+
+    try:
+        from src.utils import get_ideas_summary, select_relevant_ideas, safe_email_from_user
+
+        uid = (st.session_state.get("user_email") or "").strip().lower()
+        safe_email = safe_email_from_user(uid) if uid else ""
+
+        if safe_email:
+            ideas_all = get_ideas_summary(safe_email, n=30) or []
+            ideas_sel = select_relevant_ideas(ideas_all, user_text, n=6) or []
+
+            cleaned = []
+            for it in ideas_sel:
+                if isinstance(it, dict):
+                    txt = (it.get("text") or "").strip()
+                    if txt:
+                        cleaned.append({**it, "text": txt})
+                elif isinstance(it, str):
+                    txt = it.strip()
+                    if txt:
+                        cleaned.append({"text": txt})
+
+            ideas_summary = cleaned
+            ideas_dump = json.dumps(ideas_summary, ensure_ascii=False)
+    except Exception:
+        ideas_summary = []
+        ideas_dump = "[]"
+
+    choice = _extract_schedule_choice(user_text)
+    if choice and st.session_state.get("idea_options"):
+        # carry selection into brain context so it can turn it into a schedulable plan/question
+        st.session_state["selected_idea"] = choice
+    else:
+        st.session_state["selected_idea"] = ""
+
+    # ---- call brain ----
     raw = get_coo_response(
         api_key=api_key,
         user_request=user_text,
@@ -236,35 +310,44 @@ def execute_plan_logic(user_text: str, image_obj=None):
         calendar_data=cal_str,
         chat_history=st.session_state.chat_history,
         image_obj=image_obj,
-        current_location=st.session_state.user_location
+        current_location=st.session_state.user_location,
+        ideas_summary=ideas_summary,
+        ideas_dump=ideas_dump,
     )
 
     data = _extract_json(raw)
+    # Persist weekend options deterministically (no UI change)
+    opts = _extract_options_json(data.get("pre_prep", ""))
+    if opts:
+        st.session_state["idea_options"] = opts  # existing key used in debug :contentReference[oaicite:9]{index=9}
+
     if not data:
         add_msg("assistant", "⚠️ Error: I couldn't process that. Please try again.")
         return
 
-    resp_text = data.get("text", "")
-
+    # add chat entries
     if user_text:
         add_msg("user", user_text)
     elif image_obj:
         add_msg("user", "📷 [Scanned Image]")
 
-    add_msg("assistant", resp_text)
-    uid = st.session_state.get("user_email")
+    add_msg("assistant", data.get("text", ""))
 
-        # -----------------------------
-    # NEW: Memory write-back (Layer B per-user)
-    # Brain embeds tags in pre_prep like:
-    # [[MEMORY:{"kind":"preference","key":"outing_day","value":"Sunday","confidence":0.8}]]
-    # -----------------------------
+    # ---- optional debug (console only) ----
+    if st.session_state.get("debug"):
+        print("=== DEBUG FLOW ===")
+        print("user_text:", repr(user_text))
+        print("schedule_intent:", schedule_intent)
+        print("pending_events:", len(st.session_state.get("pending_events") or []))
+        print("ideas_summary_count:", len(ideas_summary))
+        print("raw_from_brain_head:", (raw or "")[:250])
+
+    # ---- memory writeback (unchanged) ----
     try:
         from src.utils import parse_memory_tags, append_user_memory_entry
         uid = (st.session_state.get("user_email") or "").strip().lower()
         tags = parse_memory_tags(data.get("pre_prep", ""))
         for t in tags:
-            # allow only safe fields
             entry = {
                 "kind": t.get("kind", "preference"),
                 "key": t.get("key", ""),
@@ -273,26 +356,15 @@ def execute_plan_logic(user_text: str, image_obj=None):
                 "notes": t.get("notes", ""),
                 "source": "brain",
             }
-            # Only write if key/value present
             if entry["key"] and entry["value"] and uid:
                 append_user_memory_entry(uid, entry)
     except Exception:
         pass
 
-
     # ✅ Only draft when strict scheduling intent is detected
     new_events = data.get("events", [])
     if schedule_intent and new_events:
         st.session_state.pending_events = new_events
-
-def _extract_json(raw):
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except:
-        m = re.search(r"(\{.*\})", raw, re.DOTALL)
-        return json.loads(m.group(1)) if m else None
 
 def add_msg(role, content):
     st.session_state.chat_history.append({"role": role, "content": content})
