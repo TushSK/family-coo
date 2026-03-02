@@ -69,10 +69,24 @@ def _next_saturday_date(now: datetime.datetime) -> str:
     return ns.strftime("%Y-%m-%d")
 
 
+
+
 # -----------------------------
 # Intent + guardrails
 # -----------------------------
 _SCHEDULE_INTENT_RE = re.compile(r"\b(schedule|add|plan)\b", flags=re.IGNORECASE)
+
+_FINAL_SCHEDULE_RE = re.compile(r"(?i)^\s*schedule\s*([A-C])\s*$")
+
+def _is_schedule_choice(user_text: str) -> bool:
+    return bool(_FINAL_SCHEDULE_RE.match((user_text or "").strip()))
+
+def _assistant_has_time_choice_prompt(text: str) -> bool:
+    t = text or ""
+    has_reply_exactly = "reply exactly" in t.lower() and "schedule a" in t.lower() and "schedule b" in t.lower()
+    # time range like "10:00 AM - 2:00 PM"
+    has_time_range = bool(re.search(r"\b\d{1,2}:\d{2}\s*(AM|PM)\s*-\s*\d{1,2}:\d{2}\s*(AM|PM)\b", t, flags=re.IGNORECASE))
+    return has_reply_exactly and has_time_range
 
 
 def _is_schedule_intent(user_text: str) -> bool:
@@ -617,7 +631,7 @@ def _regen_safe_chat_no_scheduling(
     completion = client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=0.6,
+        temperature=0.7,
         max_tokens=700,
         stream=False,
     )
@@ -684,6 +698,103 @@ def _regen_time_question(
     return parsed
 
 
+
+
+def _regen_force_plan_from_selection(
+    client: Groq,
+    model: str,
+    ctx: Dict[str, Any],
+    user_request: str,
+    selection_summary: str,
+) -> Dict[str, Any]:
+    """Force a final PLAN (with one event) after the user selects a specific time option.
+
+    This avoids cases where the model replies with chat/confirmation text and no events,
+    which prevents Flow from creating a Draft.
+
+    IMPORTANT:
+    - No hardcoded event details in code.
+    - The LLM must output STRICT JSON only with keys: type,text,pre_prep,events.
+    """
+    instruction = (
+        "You must return STRICT JSON ONLY with keys: type,text,pre_prep,events.\n"
+        "The user has CONFIRMED a specific selection and expects the event to be drafted now.\n"
+        "Return type='plan' with exactly ONE event in events[].\n"
+        "The event MUST include non-empty start_time and end_time in format YYYY-MM-DDTHH:MM:SS.\n"
+        "Use the selection details below to set title, location, date, start_time, end_time, and description.\n"
+        "Do NOT ask follow-up questions.\n"
+        f"Selection: {selection_summary}\n"
+
+    )
+
+    system_prompt = build_system_prompt(ctx)
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": instruction},
+        {"role": "user", "content": user_request or ""},
+    ]
+
+    completion = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0.3,
+        max_tokens=700,
+        stream=False,
+    )
+
+    txt = (completion.choices[0].message.content or "").strip()
+    parsed = _try_parse_json(txt)
+    if not isinstance(parsed, dict):
+        try:
+            fixed = _repair_json_with_llm(client, model, txt)
+            parsed = _try_parse_json(fixed)
+        except Exception:
+            parsed = None
+
+    if not isinstance(parsed, dict):
+        return {"type": "error", "text": "", "pre_prep": "", "events": []}
+
+    parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
+    parsed["type"] = "plan"
+    # If the model failed to populate required times, retry once with a stricter instruction.
+    try:
+        ev0 = (parsed.get("events") or [{}])[0]
+        if not (ev0.get("start_time") and ev0.get("end_time")):
+            strict2 = (
+                "You must return STRICT JSON ONLY with keys: type,text,pre_prep,events.\n"
+                "Return type='plan' with exactly ONE event in events[].\n"
+                "CRITICAL: start_time and end_time MUST be non-empty and formatted YYYY-MM-DDTHH:MM:SS.\n"
+                "Use the selection details to infer the exact date and the selected time window.\n"
+                "Do NOT ask follow-up questions.\n"
+                f"Selection: {selection_summary}\n"
+            )
+            messages2 = [
+                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": strict2},
+                {"role": "user", "content": user_request or ""},
+            ]
+            c2 = client.chat.completions.create(
+                model=model,
+                messages=messages2,
+                temperature=0.2,
+                max_tokens=900,
+                stream=False,
+            )
+            txt2 = (c2.choices[0].message.content or "").strip()
+            parsed2 = _try_parse_json(txt2)
+            if not isinstance(parsed2, dict):
+                try:
+                    fixed2 = _repair_json_with_llm(client, model, txt2)
+                    parsed2 = _try_parse_json(fixed2)
+                except Exception:
+                    parsed2 = None
+            if isinstance(parsed2, dict):
+                parsed2 = _ensure_event_schema(parsed2, user_request, _get_tz_now())
+                parsed2["type"] = "plan"
+                parsed = parsed2
+    except Exception:
+        pass
+    return parsed
 # -----------------------------
 # Main entrypoint
 # -----------------------------
@@ -708,6 +819,9 @@ def get_coo_response(
     # Backward compatibility: flow.py passes image_obj
     if image_context is None and image_obj is not None:
         image_context = image_obj
+
+    # Keep the exact original user input for intent checks (do not mutate)
+    original_user_request = (user_request or '').strip()
 
     # Normalize None -> empty structures (type-safe)
     memory = memory or []
@@ -755,7 +869,13 @@ def get_coo_response(
             if mm:
                 picked = mm.group(1).strip().strip(".")
                 if picked:
-                    user_request = f"schedule {picked}"
+                    picked_clean = picked
+                    # Remove trailing instruction text that can confuse the planner
+                    for cut in ['Reply exactly', 'Reply']:
+                        if cut in picked_clean:
+                            picked_clean = picked_clean.split(cut, 1)[0].strip()
+                    picked_clean = picked_clean.rstrip(' .?')
+                    user_request = f"schedule {picked_clean}"
         except Exception:
             pass
 
@@ -883,6 +1003,47 @@ def get_coo_response(
 
     # Enforce schema
     parsed = _ensure_event_schema(parsed, user_request, now)
+
+    # Deterministic: if user selected schedule A/B/C AND last assistant was a time-choice prompt,
+    # we MUST return a plan with a real event for Drafting.
+    if _is_schedule_choice(user_request) and _assistant_has_time_choice_prompt(last_assistant_text):
+        t = (parsed.get("type") or "").lower()
+        evs = parsed.get("events") or []
+        missing_times = (
+            (not evs) or
+            (not (evs[0].get("start_time") or "").strip()) or
+            (not (evs[0].get("end_time") or "").strip())
+        )
+        if t != "plan" or missing_times:
+            forced = _regen_force_plan_with_times(
+                client, model, ctx, user_request, last_assistant_text
+            )
+            return json.dumps(forced, ensure_ascii=False)
+
+
+
+    # Deterministic drafting: if user selected a time option and model didn't emit a plan/events, force a plan regen.
+    try:
+        # Deterministic draft enforcement: if user selects a time option (schedule A/B/C)
+        # but the model returns chat/confirmation or empty events, force a one-shot regen to a plan+events.
+        # This also covers cases where sel.kind fails to detect time_choice but the last assistant message
+        # clearly contains a time window A/B/C list.
+        _m_choice = re.search(r"\b(schedule\s*)?([A-C])\b", original_user_request, flags=re.IGNORECASE)
+        _choice_letter = (_m_choice.group(2).upper() if _m_choice else (sel.get('choice') or '')).upper()
+        _looks_like_time_list = bool(
+            re.search(r"\b(time window|time slot|start time|what time|time works)\b", last_assistant_text, flags=re.IGNORECASE)
+            and re.search(r"\(A\).*\(B\).*\(C\)", last_assistant_text, flags=re.IGNORECASE | re.DOTALL)
+        )
+        _is_time_choice = bool(
+            (_choice_letter and sel.get('kind') == 'time_choice') or (_choice_letter and _looks_like_time_list)
+        )
+        if _is_time_choice and _choice_letter and _is_schedule_intent(original_user_request):
+            if (parsed.get('type') != 'plan') or (not parsed.get('events')):
+                selection_summary = f"User chose time option {_choice_letter} from the last assistant time window list. Last assistant time list: {last_assistant_text}"
+                forced = _regen_force_plan_from_selection(client, model, ctx, original_user_request, selection_summary)
+                return json.dumps(forced, ensure_ascii=False)
+    except Exception:
+        pass
 
     # -----------------------------
     # -----------------------------

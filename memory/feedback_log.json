@@ -195,5 +195,17 @@
         "feedback": "User completed this. Reason: Completed",
         "rating": "\ud83d\udc4d",
         "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-02",
+        "mission": "Florida Aquarium Visit",
+        "feedback": "User skipped this. Reason: visited Buddhist temple nearby instead",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-03-02",
+        "mission": "Florida Aquarium Visit",
+        "feedback": "User skipped this. Reason: visited Buddhist temple nearby instead",
+        "rating": "\ud83d\udc4e"
     }
 ]

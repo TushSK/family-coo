@@ -116,7 +116,7 @@
         "source_id": null,
         "title": "Florida Aquarium Visit",
         "end_time": "2026-02-28T18:00:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -124,7 +124,7 @@
         "source_id": "lvdt2m0qo1ucbd8uk14noua66c",
         "title": "Florida Aquarium Visit",
         "end_time": "2026-02-28T18:00:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     }
 ]

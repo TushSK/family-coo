@@ -314,7 +314,7 @@ def execute_plan_logic(user_text: str, image_obj=None):
         ideas_summary=ideas_summary,
         ideas_dump=ideas_dump,
     )
-
+    print("BRAIN_RAW:", raw)
     data = _extract_json(raw)
     # Persist weekend options deterministically (no UI change)
     opts = _extract_options_json(data.get("pre_prep", ""))

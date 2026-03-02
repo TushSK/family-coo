@@ -833,6 +833,14 @@ def render_command_center(
     st.session_state.setdefault("checkin_feedback_open", False)
     st.session_state.setdefault("checkin_feedback_text", "")
 
+    # ✅ Deferred clear flags (check-in feedback)
+    st.session_state.setdefault("clear_checkin_feedback_text", False)
+
+    # ✅ Clear BEFORE widget instantiation (mandatory rule)
+    if st.session_state.get("clear_checkin_feedback_text"):
+        st.session_state["checkin_feedback_text"] = ""
+        st.session_state["clear_checkin_feedback_text"] = False
+
     # ✅ Deferred clear flags
     st.session_state.setdefault("clear_plan_text", False)
     st.session_state.setdefault("clear_conversation", False)
@@ -884,7 +892,7 @@ def render_command_center(
                     if callable(on_checkin_yes):
                         on_checkin_yes()
                     st.session_state["checkin_feedback_open"] = False
-                    st.session_state["checkin_feedback_text"] = ""
+                    st.session_state["clear_checkin_feedback_text"] = True
                     st.rerun()
 
             with no_col:
@@ -911,12 +919,12 @@ def render_command_center(
                         if callable(on_checkin_no_with_feedback):
                             on_checkin_no_with_feedback(txt)
                         st.session_state["checkin_feedback_open"] = False
-                        st.session_state["checkin_feedback_text"] = ""
+                        st.session_state["clear_checkin_feedback_text"] = True
                         st.rerun()
                 with f2:
                     if st.button("Cancel", key="coo_checkin_cancel", use_container_width=True):
                         st.session_state["checkin_feedback_open"] = False
-                        st.session_state["checkin_feedback_text"] = ""
+                        st.session_state["clear_checkin_feedback_text"] = True
                         st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
 
