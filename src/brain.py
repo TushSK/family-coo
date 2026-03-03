@@ -35,7 +35,7 @@ from src.prompts import (
     build_weekend_regen_prompt,
 )
 
-
+_FINAL_REPLY_LINE = "Reply exactly: schedule A / schedule B / schedule C"
 # -----------------------------
 # Time helpers (no pytz)
 # -----------------------------
@@ -68,13 +68,138 @@ def _next_saturday_date(now: datetime.datetime) -> str:
     ns = now + datetime.timedelta(days=days_ahead)
     return ns.strftime("%Y-%m-%d")
 
+def _format_abc_text_for_ui(text: str) -> str:
+    """
+    Deterministic UI formatter for question/conflict blocks.
+    Fixes clumped output even when model uses inline bullets like:
+    (A) Title • Duration: 2 hours • Time window: Sat...
+    """
+    if not text:
+        return text
+
+    t = text.strip()
+
+    # 1) Normalize inline bullet separators into line breaks
+    #    "Title • Duration: ..." -> "Title\n• Duration: ..."
+    t = t.replace(" • ", "\n• ")
+
+    # 2) Force A/B/C headers to start as separate paragraphs
+    t = re.sub(r"\s*\(A\)\s*", "\n\n(A) ", t)
+    t = re.sub(r"\s*\(B\)\s*", "\n\n(B) ", t)
+    t = re.sub(r"\s*\(C\)\s*", "\n\n(C) ", t)
+
+    # 3) Ensure Reply line starts as its own paragraph
+    t = re.sub(r"\s*Reply exactly:\s*", "\n\nReply exactly: ", t, flags=re.IGNORECASE)
+
+    # 4) If Optional was appended inline, put it on next line
+    t = re.sub(r"\s*\(Optional:", "\n(Optional:", t, flags=re.IGNORECASE)
+
+    # 5) Convert common fields into bullet lines (if they appear inline)
+    #    Handles both " Duration:" and "• Duration:"
+    t = re.sub(r"[ \t]*Duration:\s*", "\n• Duration: ", t, flags=re.IGNORECASE)
+    t = re.sub(r"[ \t]*Time window:\s*", "\n• Time window: ", t, flags=re.IGNORECASE)
+    t = re.sub(r"[ \t]*When:\s*", "\n• When: ", t, flags=re.IGNORECASE)
+    t = re.sub(r"[ \t]*Where:\s*", "\n• Where: ", t, flags=re.IGNORECASE)
+    t = re.sub(r"[ \t]*Notes:\s*", "\n• Notes: ", t, flags=re.IGNORECASE)
+
+    # 6) Clean excess blank lines
+    t = re.sub(r"\n{3,}", "\n\n", t)
+
+    return t.strip()
+
+def _finalize_for_ui(parsed: dict) -> dict:
+    """
+    Single deterministic final pass for ALL outputs:
+    - Never allow empty visible text
+    - Apply correct formatting by type
+    - Ensure reply-line exists when A/B/C exists
+    """
+    if not isinstance(parsed, dict):
+        return {
+            "type": "chat",
+            "text": "Tell me what you’d like to do (e.g., ‘plan a park visit Saturday after 11am’).",
+            "pre_prep": "",
+            "events": [],
+        }
+
+    # Ensure required keys exist (schema guard)
+    parsed.setdefault("type", "chat")
+    parsed.setdefault("text", "")
+    parsed.setdefault("pre_prep", "")
+    parsed.setdefault("events", [])
+
+    # Never allow empty visible messages
+    if not (parsed.get("text") or "").strip():
+        # Keep it safe: no scheduling push here
+        parsed["type"] = "chat"
+        parsed["text"] = "Tell me what you’d like to do (e.g., ‘plan a park visit Saturday after 11am’)."
+        parsed["pre_prep"] = parsed.get("pre_prep") or ""
+        parsed["events"] = []
+
+    t = (parsed.get("type") or "").lower()
+
+    # Apply A/B/C formatting ONLY to question/conflict
+    if t in ("question", "conflict"):
+        parsed["text"] = _format_abc_text_for_ui(parsed.get("text", ""))
+
+    # Apply plan formatting ONLY to plan
+    if t == "plan":
+        parsed["text"] = _format_plan_text_from_event(parsed)
+
+    # Ensure reply line exists for A/B/C blocks
+    txt = parsed.get("text") or ""
+    if "(A)" in txt and "(B)" in txt and "(C)" in txt:
+        if _FINAL_REPLY_LINE not in txt:
+            parsed["text"] = (txt.rstrip() + "\n\n" + _FINAL_REPLY_LINE).strip()
+
+    return parsed
 
 
+def _dump_final(parsed: dict) -> str:
+    """Always return through finalizer (prevents bypass bugs)."""
+    parsed = _finalize_for_ui(parsed)
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def _format_plan_text_from_event(parsed: dict) -> str:
+    """
+    Deterministic Draft-ready text built ONLY from events[0].
+    This prevents the A/B/C formatter from breaking plan text.
+    """
+    evs = parsed.get("events") or []
+    if not evs or not isinstance(evs[0], dict):
+        # fallback to whatever the model wrote (but keep it non-empty)
+        return (parsed.get("text") or "").strip() or "Draft ready. Review in Drafting and click Add."
+
+    ev = evs[0]
+    title = (ev.get("title") or "Draft event").strip()
+    start_time = (ev.get("start_time") or "").strip()
+    end_time = (ev.get("end_time") or "").strip()
+    location = (ev.get("location") or "").strip()
+
+    when_line = ""
+    if start_time and end_time:
+        when_line = f"{start_time} – {end_time}"
+    elif start_time:
+        when_line = f"{start_time}"
+
+    lines = []
+    lines.append("Draft ready")
+    lines.append("")
+    lines.append(title)
+    if when_line:
+        lines.append(when_line)
+    if location:
+        lines.append(f"Location: {location}")
+    lines.append("")
+    lines.append("Review in Drafting and click Add.")
+
+    return "\n".join(lines).strip()
 
 # -----------------------------
 # Intent + guardrails
 # -----------------------------
-_SCHEDULE_INTENT_RE = re.compile(r"\b(schedule|add|plan)\b", flags=re.IGNORECASE)
+_SCHEDULE_INTENT_RE = re.compile(r"\b(schedule|add|plan|book|add|create|visit)\b", flags=re.IGNORECASE)
 
 _FINAL_SCHEDULE_RE = re.compile(r"(?i)^\s*schedule\s*([A-C])\s*$")
 
@@ -645,7 +770,10 @@ def _regen_safe_chat_no_scheduling(
         except Exception:
             parsed = None
     if not isinstance(parsed, dict):
-        return {"type": "chat", "text": "", "pre_prep": "", "events": []}
+        return {"type": "chat", 
+                "text": "I’m here. Tell me what you want to do (e.g., ‘plan a park visit Saturday after 11am’ or ‘suggest weekend ideas’).", 
+                "pre_prep": "", 
+                "events": []}
     parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
     parsed["type"] = "chat"
     parsed["events"] = []
@@ -1004,24 +1132,6 @@ def get_coo_response(
     # Enforce schema
     parsed = _ensure_event_schema(parsed, user_request, now)
 
-    # Deterministic: if user selected schedule A/B/C AND last assistant was a time-choice prompt,
-    # we MUST return a plan with a real event for Drafting.
-    if _is_schedule_choice(user_request) and _assistant_has_time_choice_prompt(last_assistant_text):
-        t = (parsed.get("type") or "").lower()
-        evs = parsed.get("events") or []
-        missing_times = (
-            (not evs) or
-            (not (evs[0].get("start_time") or "").strip()) or
-            (not (evs[0].get("end_time") or "").strip())
-        )
-        if t != "plan" or missing_times:
-            forced = _regen_force_plan_with_times(
-                client, model, ctx, user_request, last_assistant_text
-            )
-            return json.dumps(forced, ensure_ascii=False)
-
-
-
     # Deterministic drafting: if user selected a time option and model didn't emit a plan/events, force a plan regen.
     try:
         # Deterministic draft enforcement: if user selects a time option (schedule A/B/C)
@@ -1041,7 +1151,7 @@ def get_coo_response(
             if (parsed.get('type') != 'plan') or (not parsed.get('events')):
                 selection_summary = f"User chose time option {_choice_letter} from the last assistant time window list. Last assistant time list: {last_assistant_text}"
                 forced = _regen_force_plan_from_selection(client, model, ctx, original_user_request, selection_summary)
-                return json.dumps(forced, ensure_ascii=False)
+                return _dump_final(forced)
     except Exception:
         pass
 
@@ -1053,7 +1163,7 @@ def get_coo_response(
         # If assistant tries to push scheduling or time selection, regenerate as chat.
         if _looks_like_banned_scheduling_prompt(parsed.get("text", "")) or (parsed.get("type") in {"plan", "question", "confirmation", "conflict"} and "schedule" in (parsed.get("text") or "").lower()):
             safe_chat = _regen_safe_chat_no_scheduling(client, model, ctx, user_request)
-            return json.dumps(safe_chat, ensure_ascii=False)
+            return _dump_final(safe_chat)
 
     t = (parsed.get("type") or "").lower()
     txt = (parsed.get("text") or "")
@@ -1073,7 +1183,21 @@ def get_coo_response(
                 memory_dump=memory_dump,
                 ideas_dump=ideas_dump,
             )
-            return json.dumps(regen, ensure_ascii=False)
+            return _dump_final(regen)
+
+    # -----------------------------
+    # A/B/C enforcement for scheduling questions (non-weekend)
+    # If the model returns a question without the required A/B/C + final reply line,
+    # regenerate a tight A/B/C question to prevent UI "empty options" experiences.
+    # -----------------------------
+    if _is_schedule_intent(user_request) and parsed.get("type") == "question":
+        qtxt = (parsed.get("text") or "")
+        has_abc = ("(A)" in qtxt and "(B)" in qtxt and "(C)" in qtxt)
+        has_reply = ('Reply exactly: schedule A / schedule B / schedule C' in qtxt)
+        if not (has_abc and has_reply):
+            regen = _regen_time_question(client, model, ctx, user_request=user_request)
+            return _dump_final(regen)
+
 
     # -----------------------------
     # Prevent guessed-time scheduling (plan with events but user didn't specify time)
@@ -1081,7 +1205,8 @@ def get_coo_response(
     if t == "plan" and events:
         if not _user_provided_time(user_request) and not _user_requested_multiple(user_request):
             q = _regen_time_question(client, model, ctx, user_request)
-            return json.dumps(q, ensure_ascii=False)
+            return _dump_final(q)
+        
 
     # Final return (STRICT JSON only)
-    return json.dumps(parsed, ensure_ascii=False)
+    return _dump_final(parsed)

@@ -131,5 +131,77 @@
         "notes": "",
         "source": "brain",
         "ts_utc": "2026-02-26T00:26:19.497202+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor_activities",
+        "value": "hiking",
+        "confidence": 0.8,
+        "notes": "user has shown interest in hiking",
+        "source": "brain",
+        "ts_utc": "2026-03-02T17:42:45.991006+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor activities",
+        "value": "Hillsborough River State Park Hike",
+        "confidence": 0.8,
+        "notes": "User has shown interest in outdoor activities and hiking",
+        "source": "brain",
+        "ts_utc": "2026-03-02T18:32:15.326008+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor_activities",
+        "value": "prefer",
+        "confidence": 0.8,
+        "notes": "User prefers outdoor activities and less travel",
+        "source": "brain",
+        "ts_utc": "2026-03-03T14:48:24.746073+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor_activities",
+        "value": "true",
+        "confidence": 0.8,
+        "notes": "User prefers outdoor activities",
+        "source": "brain",
+        "ts_utc": "2026-03-03T17:05:20.472995+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor activities",
+        "value": "prefer",
+        "confidence": 0.8,
+        "notes": "User has shown interest in outdoor activities",
+        "source": "brain",
+        "ts_utc": "2026-03-03T17:47:59.881821+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor activities",
+        "value": "preferred",
+        "confidence": 0.8,
+        "notes": "User prefers outdoor activities",
+        "source": "brain",
+        "ts_utc": "2026-03-03T18:04:01.632222+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor activities",
+        "value": "prefer outdoor activities",
+        "confidence": 0.8,
+        "notes": "User prefers outdoor activities",
+        "source": "brain",
+        "ts_utc": "2026-03-03T18:14:18.288099+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "outdoor",
+        "value": "prefer",
+        "confidence": 0.8,
+        "notes": "User prefers outdoor activities",
+        "source": "brain",
+        "ts_utc": "2026-03-03T18:21:55.623125+00:00"
     }
 ]

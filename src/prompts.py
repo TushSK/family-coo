@@ -1,16 +1,17 @@
-# src/prompts_v23.py
-# Prompt builders for Family COO Brain (Checkpoint 2.3)
-# - No Streamlit
-# - No tool calls
-# - No file I/O
-# - Pure string construction only
+# prompts.py
+# Prompt builders for Family COO Brain
+# Checkpoint 2.7 – Brain Optimization Phase (Prompt Refinement)
+# NOTE: Prompt-only changes. No tool calls. No Streamlit imports.
 
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
+# ---------------------------
+# Helpers
+# ---------------------------
 def _to_json(obj: Any) -> str:
     try:
         return json.dumps(obj, ensure_ascii=False)
@@ -19,6 +20,7 @@ def _to_json(obj: Any) -> str:
 
 
 def _schema_example() -> Dict[str, Any]:
+    # NOTE: Keep schema fields stable. App relies on these keys.
     return {
         "type": "plan|conflict|question|confirmation|chat|error",
         "text": "string",
@@ -35,203 +37,250 @@ def _schema_example() -> Dict[str, Any]:
     }
 
 
+def _schema_question_example() -> Dict[str, Any]:
+    return {"type": "question", "text": "string", "pre_prep": "string", "events": []}
+
+
+_FINAL_REPLY_LINE = "Reply exactly: schedule A / schedule B / schedule C"
+
+
+def _safe_lines_from_kv(items: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for it in items or []:
+        try:
+            k = (it.get("key") or "").strip()
+            v = (it.get("value") or "").strip()
+            if k and v:
+                lines.append(f"- {k}: {v}")
+        except Exception:
+            continue
+    return "\n".join(lines) if lines else "- (none)"
+
+
+def _safe_lines_from_ideas(items: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for it in items or []:
+        try:
+            txt = (it.get("text") or "").strip()
+            if txt:
+                lines.append(f"- {txt}")
+        except Exception:
+            continue
+    return "\n".join(lines) if lines else "- (none)"
+
+
+# ---------------------------
+# Main system prompt
+# ---------------------------
 def build_system_prompt(ctx: Dict[str, Any]) -> str:
     """
-    Checkpoint 2.5 Fix #1:
-    - Remove accidental duplicated prompt blocks inside build_system_prompt
-    - Ensure rules are ALWAYS injected
-    - Ensure Ideas Inbox is ALWAYS injected via ideas_summary (list[dict])
-    - Keep Brain JSON contract strict: type/text/pre_prep/events only
-    - No Streamlit, no tool calls, no file I/O
+    Checkpoint 2.7 – Prompt updates only.
+    Goals:
+      - Better readability (structured A/B/C + plan text)
+      - Fewer loops (one-attempt batch collection)
+      - Lower token waste (no back-and-forth)
+      - Keep 2.6 behavior stable (routing/guards remain in code)
     """
 
-    # ---------------------------
-    # Safe helpers
-    # ---------------------------
-    def _safe_lines_from_kv(items: List[Dict[str, Any]]) -> str:
-        lines: List[str] = []
-        for it in items or []:
-            try:
-                k = (it.get("key") or "").strip()
-                v = (it.get("value") or "").strip()
-                if k and v:
-                    lines.append(f"- {k}: {v}")
-            except Exception:
-                continue
-        return "\n".join(lines) if lines else "- (none)"
-
-    def _safe_lines_from_ideas(items: List[Dict[str, Any]]) -> str:
-        lines: List[str] = []
-        for it in items or []:
-            try:
-                txt = (it.get("text") or "").strip()
-                if txt:
-                    lines.append(f"- {txt}")
-            except Exception:
-                continue
-        return "\n".join(lines) if lines else "- (none)"
-
-    # ---------------------------
-    # Blocks: memory + ideas
-    # ---------------------------
-    memory_summary = ctx.get("memory_summary") or []
-    ideas_summary = ctx.get("ideas_summary") or []
-
-    memory_block = _safe_lines_from_kv(memory_summary)
-    ideas_block = _safe_lines_from_ideas(ideas_summary)
-
-    # ---------------------------
-    # Context fields
-    # ---------------------------
-    current_time_str = str(ctx.get("current_time_str", ""))
-    cheat_sheet = str(ctx.get("cheat_sheet", ""))
-    next_saturday = str(ctx.get("next_saturday", ""))
-    current_location = str(ctx.get("current_location", ""))
+    current_time_str = str(ctx.get("current_time_str", "") or "")
+    cheat_sheet = str(ctx.get("cheat_sheet", "") or "")
+    next_saturday = str(ctx.get("next_saturday", "") or "")
+    current_location = str(ctx.get("current_location", "") or "")
     calendar_data = ctx.get("calendar_data", [])
     pending_dump = ctx.get("pending_dump", "[]")
-    memory_dump = str(ctx.get("memory_dump", "[]"))
-    history_txt = str(ctx.get("history_txt", ""))
+    memory_dump = str(ctx.get("memory_dump", "[]") or "[]")
+    history_txt = str(ctx.get("history_txt", "") or "")
     idea_options = ctx.get("idea_options", []) or []
     selected_idea = str(ctx.get("selected_idea") or "")
     continuation_hint = str(ctx.get("continuation_hint") or "")
-    user_request = str(ctx.get("user_request", ""))
+    user_request = str(ctx.get("user_request", "") or "")
+
+    memory_summary = ctx.get("memory_summary") or []
+    ideas_summary = ctx.get("ideas_summary") or []
+    memory_block = _safe_lines_from_kv(memory_summary)
+    ideas_block = _safe_lines_from_ideas(ideas_summary)
 
     schema = _schema_example()
 
-    # ---------------------------
-    # Hard rules (SMART Policy)
-    # ---------------------------
     rules_block = f"""
-YOU ARE: Family COO.
+YOU ARE: Family COO (home chief-of-staff).
 
 USER PREFERENCES (LATEST-WINS, USE WHEN RELEVANT):
 {memory_block}
 
-IDEAS INBOX (USER-ADDED ACTIVITIES — PRIORITIZE WHEN RELEVANT):
+IDEAS INBOX (USER-ADDED ACTIVITIES — USE WHEN RELEVANT):
 {ideas_block}
 
-NON-NEGOTIABLE OUTPUT CONTRACT:
-- Output MUST be STRICT JSON only (no markdown, no extra text).
-- Top-level keys MUST be exactly: type, text, pre_prep, events
-- No extra fields. No commentary.
+========================
+ABSOLUTE OUTPUT CONTRACT
+========================
+- Output MUST be STRICT JSON only (no markdown, no stray text).
+- Top-level keys MUST be EXACTLY: type, text, pre_prep, events
 - Always include all 4 keys even if empty.
-- If type="question" => events MUST be []
-- If type="plan" or type="conflict" => events MUST be non-empty and valid schema.
+- events MUST always exist (empty list allowed).
+- type="question" => events MUST be []
+- type="plan"/"conflict" => events MUST be non-empty and MUST include events[0].start_time
 
-SCHEDULING TRIGGER (APP GATE):
-- The app schedules ONLY if the USER message contains the whole word: schedule/add/plan.
+========================
+STABILITY / ROUTING RULES
+========================
+- The app only creates draft events when the USER message contains the whole word: schedule/add/plan.
+- If user did NOT use schedule/add/plan: DO NOT push scheduling or A/B/C scheduling prompts.
+- Greeting must never trigger scheduling logic.
 
-SMART DECISION POLICY:
-A) If you have enough info to schedule (date + time OR clear time window) AND user used schedule/add/plan => type="plan"
-B) If missing critical info => type="question" ask EXACTLY ONE tight question (prefer A/B/C choices), events=[]
-C) If conflict detected vs EXISTING CALENDAR or PENDING EVENTS => type="conflict"
-   - text must include A/B/C alternatives
-   - events must contain 2–3 alternative event options
+=========================================
+A/B/C OUTPUT FORMAT (DETERMINISTIC, STRICT)
+=========================================
+CRITICAL: You MUST use Markdown line breaks (double newlines) between options. 
+If the output looks like a paragraph, it is a FAILURE.
+
+A/B/C TEMPLATE (COPY THIS SHAPE EXACTLY):
+
+**Weekend outing — pick one:**
+
+**(A) <Title>**
+* **When:** <Day/Date> • <Start Time> – <End Time>
+* **Where:** <Place>
+* **Notes:** <1 short detail>
+
+**(B) <Title>**
+* **When:** <Day/Date> • <Start Time> – <End Time>
+* **Where:** <Place>
+* **Notes:** <1 short detail>
+
+**(C) Custom**
+Tell me: <day/date> + <start time> + <place>
+
+**Reply exactly: schedule A / schedule B / schedule C**
+
+{_FINAL_REPLY_LINE}
+
+HARD RULES:
+- MUST include blank lines between A, B, and C blocks.
+- MUST NOT put (A)(B)(C) on the same line.
+- Keep A and B to max 3 short lines (When/Where/Notes).
+- Always include the final reply line EXACTLY once. No variants. No duplicates.
+- If you violate this format, the response is INVALID.
+
+=====================
+SMART DECISION POLICY
+=====================
+A) If user used schedule/add/plan AND you have enough info to draft => type="plan"
+   - Plan text MUST be structured like this (copy the shape):
+
+     Draft ready
+
+     <Event Title>
+     <Day> • <Start Time> – <End Time>
+     Location: <Location>
+
+     Review in Drafting and click Add.
+
+B) If user used schedule/add/plan BUT missing any critical info => type="question" using the A/B/C template above, events=[]
+C) If conflict vs EXISTING CALENDAR or PENDING EVENTS => type="conflict"
+   - text MUST use the A/B/C template above
+   - events MUST contain 2–3 alternative event options (valid schema)
 D) If same event already exists (same title + start_time +/- 15 min) => type="confirmation"
+   - Ask one short confirmation question (no A/B/C unless needed).
 
-WEEKEND OUTING BEHAVIOR (MANDATORY):
-- If user asks weekend ideas / outings / family fun AND not enough info to schedule:
+==========================================
+ONE-ATTEMPT MULTI-FIELD COLLECTION (BATCH)
+==========================================
+If the user used schedule/add/plan and ANY of these are missing/unclear:
+- date/day
+- start time (or clear time window)
+- location/place
+THEN:
+- Ask for ALL missing pieces in ONE question using the A/B/C template.
+- (A) and (B) must be fully specified proposals (date + time + place).
+- Use ONLY: reference dates, next_saturday, user location, and explicit Memory/Ideas/History hints.
+- If you cannot fill a field confidently, do NOT guess. Put the unknown(s) into option (C).
+
+==========================================
+NO-HALLUCINATION LOCATION / BUSINESS RULE
+========================================
+- Never invent real business names or addresses (stores, clubs, venues).
+- Only use a specific venue if it exists explicitly in Memory / Ideas / History.
+- Otherwise use generic phrasing like:
+  "a park near you" / "a nearby store" / "at home".
+
+=========================
+WEEKEND OUTING BEHAVIOR
+=========================
+- If user asks for weekend ideas / outings / family fun AND did NOT use schedule/add/plan:
   Return type="question", events=[]
-  text MUST include EXACTLY 3 options labeled (A),(B),(C)
-  Each option must include: Title + Duration + Suggested time window
-  Then ONE instruction line:
-    "Reply exactly: schedule A / schedule B / schedule C"
+  Use the A/B/C template; titles should be activities + generic locations.
+  End with the exact final reply line.
+  Optionally add ONE extra line after the reply line:
+  "(Optional: add Sat/Sun + adjust time window)"
 
-ANTI-LAZY RULES:
-- Do NOT ask generic mirror questions like:
-  "Which activity would you like?" / "Which outing would you like to schedule?"
-- If you ask a question, it must contain concrete A/B/C choices.
+=====================
+GENERAL STYLE
+=====================
+- Keep answers concise and readable.
+- If you ask a question, ask exactly ONE question (use A/B/C template when collecting fields).
 """.strip()
 
-    # ---------------------------
-    # Prompt assembly
-    # ---------------------------
-    lines: List[str] = []
-    lines.append(rules_block)
-    lines.append("")
-    lines.append(f"CURRENT TIME (America/New_York): {current_time_str}".strip())
+    lines: List[str] = [rules_block]
+
+    if current_time_str:
+        lines += ["", f"CURRENT TIME (America/New_York): {current_time_str}".strip()]
     if cheat_sheet:
-        lines.append("")
-        lines.append("CHEAT SHEET:")
-        lines.append(cheat_sheet.strip())
+        lines += ["", "REFERENCE DATES:", cheat_sheet.strip()]
     if next_saturday:
-        lines.append("")
-        lines.append(f"REFERENCE: \"Next Saturday\" date is: {next_saturday}".strip())
+        lines += ["", f'REFERENCE: "Next Saturday" date is: {next_saturday}'.strip()]
 
-    lines.append("")
-    lines.append(f"USER LOCATION: {current_location}".strip())
-
-    lines.append("")
-    lines.append("EXISTING CALENDAR (Busy Slots):")
-    lines.append(calendar_data if isinstance(calendar_data, str) else _to_json(calendar_data))
-
-    lines.append("")
-    lines.append("PENDING EVENTS (Treat as Busy):")
-    lines.append(pending_dump if isinstance(pending_dump, str) else _to_json(pending_dump))
-
-    lines.append("")
-    lines.append("MEMORY BANK (raw json):")
-    lines.append(memory_dump)
-
-    lines.append("")
-    lines.append("CHAT HISTORY (recent):")
-    lines.append(history_txt)
-
-    lines.append("")
-    lines.append("IDEA OPTIONS (if previously offered):")
-    lines.append(_to_json(idea_options))
-
-    lines.append("")
-    lines.append("USER SELECTED IDEA (if detected):")
-    lines.append(selected_idea)
+    lines += ["", f"USER LOCATION: {current_location}".strip()]
+    lines += ["", "EXISTING CALENDAR (Busy Slots):", calendar_data if isinstance(calendar_data, str) else _to_json(calendar_data)]
+    lines += ["", "PENDING EVENTS (Treat as Busy):", pending_dump if isinstance(pending_dump, str) else _to_json(pending_dump)]
+    lines += ["", "MEMORY BANK (raw json):", memory_dump]
+    lines += ["", "CHAT HISTORY (recent):", history_txt]
+    lines += ["", "IDEA OPTIONS (if previously offered):", _to_json(idea_options)]
+    lines += ["", "USER SELECTED IDEA (if detected):", selected_idea]
 
     if continuation_hint:
-        lines.append("")
-        lines.append("CONTINUATION HINT:")
-        lines.append(continuation_hint.strip())
+        lines += ["", "CONTINUATION HINT:", continuation_hint.strip()]
 
-    lines.append("")
-    lines.append("TASK:")
-    lines.append(f'Turn the user request into an actionable outcome: "{user_request}"')
-
-    lines.append("")
-    lines.append("OUTPUT JSON SCHEMA EXAMPLE (match keys + structure):")
-    lines.append(_to_json(schema))
+    lines += ["", "TASK:", f'Turn the user request into an actionable outcome: "{user_request}"']
+    lines += ["", "OUTPUT JSON SCHEMA EXAMPLE (match keys + structure):", _to_json(schema)]
 
     return "\n".join(lines).strip()
 
 
+# ---------------------------
+# JSON repair prompt
+# ---------------------------
 def build_json_repair_prompt(bad_text: str) -> str:
     schema = _schema_example()
     lines: List[str] = []
     lines.append("You must output STRICT JSON ONLY. No markdown. No explanations.")
+    lines.append("Top-level keys MUST be exactly: type, text, pre_prep, events (no extras).")
     lines.append("")
     lines.append("Fix the following into a valid JSON object that matches EXACTLY this schema and includes ALL fields:")
     lines.append(_to_json(schema))
     lines.append("")
-    lines.append('If info is missing, use type="question", events=[], and ask exactly ONE question.')
+    lines.append('If info is missing, use type="question", events=[], and use the A/B/C TEMPLATE (multi-line) to ask for day/date + start time + place together.')
     lines.append("")
     lines.append("BAD OUTPUT TO FIX:")
     lines.append(str(bad_text or ""))
     return "\n".join(lines).strip()
 
 
+# ---------------------------
+# Weekend forced regeneration prompt (kept stable)
+# ---------------------------
 def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
-    user_request = str(ctx.get("user_request", ""))
-    current_location = str(ctx.get("current_location", ""))
-    memory_dump = str(ctx.get("memory_dump", "[]"))
-    ideas_dump = str(ctx.get("ideas_dump", "[]"))
+    user_request = str(ctx.get("user_request", "") or "")
+    current_location = str(ctx.get("current_location", "") or "")
+    memory_dump = str(ctx.get("memory_dump", "[]") or "[]")
+    ideas_dump = str(ctx.get("ideas_dump", "[]") or "[]")
     constraints = ctx.get("constraints", {}) or {}
 
-    schema_question = {
-        "type": "question",
-        "text": "string",
-        "pre_prep": "string",
-        "events": [],
-    }
+    schema_question = _schema_question_example()
 
     lines: List[str] = []
     lines.append("Return STRICT JSON ONLY. No markdown. No extra text.")
+    lines.append("Top-level keys MUST be exactly: type, text, pre_prep, events (no extras).")
     lines.append("")
     lines.append("You MUST return a JSON object matching this schema exactly (include ALL fields):")
     lines.append(_to_json(schema_question))
@@ -241,7 +290,7 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     lines.append(f"Ideas Inbox (use when relevant): {ideas_dump}")
     lines.append(f"Constraints (MUST honor): {json.dumps(constraints, ensure_ascii=False)}")
     lines.append("")
-    lines.append(f'Task: Generate EXACTLY 3 dynamic family-friendly weekend outing options for: "{user_request}"')
+    lines.append(f'Task: Generate EXACTLY 3 family-friendly weekend outing options for: "{user_request}"')
     lines.append("")
     lines.append("MANDATORY RULES:")
     lines.append('- type MUST be "question"')
@@ -251,7 +300,6 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     lines.append("- pre_prep MUST ALSO include one line starting with OPTIONS_JSON= followed by a JSON list of 3 objects.")
     lines.append("- OPTIONS_JSON objects MUST match the text options A/B/C and include keys: key,title,duration_hours,time_window,notes")
     lines.append("")
-
     lines.append("TEXT TEMPLATE (copy structure exactly):")
     lines.append("Weekend outing — pick one:")
     lines.append("")
@@ -267,15 +315,14 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     lines.append("    Duration: <N> hours")
     lines.append("    Time window: <start time>–<end time>")
     lines.append("")
-    lines.append("Reply exactly: schedule A / schedule B / schedule C")
+    lines.append(_FINAL_REPLY_LINE)
     lines.append("(Optional: add Sat/Sun + adjust time window)")
     lines.append("")
     lines.append("pre_prep FORMAT (must include both):")
     lines.append("1) Tip: <one sentence>")
-    lines.append('2) OPTIONS_JSON=[{"key":"A","title":"...","duration_hours":2,"time_window":"Sat 10:00 AM–12:00 PM","notes":"..."}, {...}, {...}]')
+    lines.append('2) OPTIONS_JSON=[{"key":"A","title":"...","duration_hours":2,"time_window":"Sat 10:00 AM–12:00 PM","notes":"..."}, {"key":"B","title":"...","duration_hours":3,"time_window":"Sun 1:00 PM–4:00 PM","notes":"..."}, {"key":"C","title":"...","duration_hours":2,"time_window":"Sat 4:00 PM–6:00 PM","notes":"..."}]')
     lines.append("")
     lines.append("If user expressed a stable preference, append ONE memory tag at the end of pre_prep on a new line:")
     lines.append('[[MEMORY:{"kind":"preference","key":"...","value":"...","confidence":0.0-1.0,"notes":""}]]')
-    lines.append("")
 
     return "\n".join(lines).strip()
