@@ -221,5 +221,14 @@
         "notes": "Completed judo classes and doctor visits; interested in hiking and water activities",
         "source": "brain",
         "ts_utc": "2026-03-05T23:54:03.893730+00:00"
+    },
+    {
+        "kind": "preference",
+        "key": "activity_preferences",
+        "value": "outdoor activities, natural places, family-friendly, minimal travel",
+        "confidence": 0.85,
+        "notes": "User prefers outdoor/nature activities and skipped aquarium for Buddhist temple visit",
+        "source": "brain",
+        "ts_utc": "2026-03-06T14:36:10.470145+00:00"
     }
 ]

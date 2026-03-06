@@ -1155,8 +1155,8 @@ def get_coo_response(
     ideas_summary: Optional[List[Dict[str, Any]]] = None,
     idea_options: Optional[List[Dict[str, Any]]] = None,
     selected_idea: str = "",
-    missions_dump: str = "[]",   # recent completed/pending missions for context
-    feedback_dump: str = "[]",   # recent feedback/learnings for context
+    missions_dump: str = "[]",
+    feedback_dump: str = "[]",
 ) -> str:
     """
     Main Brain call. Returns STRICT JSON string only.
@@ -1310,22 +1310,13 @@ def get_coo_response(
             ideas_summary = []
     ideas_dump = _safe_json_dumps(ideas_summary, default="[]")
 
-    # Count how many question turns have already happened in this thread
-    # so prompts can enforce max-3-turn resolution
+    # Count question turns already shown (for 3-turn max enforcement)
     _turn_count = sum(
         1 for m in (chat_history or [])
         if (m.get("role") == "assistant") and ("(A)" in (m.get("content") or ""))
     )
-
-    # Titles already shown to avoid repeating
-    _avoid_shown: List[str] = []
-    for _m in (chat_history or []):
-        if (_m.get("role") or "") != "assistant":
-            continue
-        for _match in re.finditer(r"\([A-C]\)\s+([^\n]+)", (_m.get("content") or "")):
-            _t = _match.group(1).strip()
-            if _t and _t.lower() != "custom" and len(_t) > 3 and _t not in _avoid_shown:
-                _avoid_shown.append(_t)
+    # Titles already shown to avoid repeating in new suggestions
+    _avoid_shown = _extract_shown_idea_titles(chat_history or [])
 
     ctx: Dict[str, Any] = {
         "current_time_str": current_time_str,
@@ -1477,8 +1468,12 @@ def get_coo_response(
 
     # -----------------------------
     # Weekend enforcement: must be a clean A/B/C question; regen if weak
+    # BUG-13: Exempt direct schedule requests that mention Saturday/Sunday
+    # (e.g. "plan lab work on Saturday at 8am") — those have full intent+time,
+    # they are NOT outing picker requests.
     # -----------------------------
-    if _is_weekend_outing_request(user_request):
+    _is_direct_schedule = _is_schedule_intent(user_request) and _user_provided_time(user_request)
+    if _is_weekend_outing_request(user_request) and not _is_direct_schedule:
         has_abc = ("(A)" in txt and "(B)" in txt and "(C)" in txt)
         if _dead_end_output(parsed, user_request=user_request) or (t != "question") or (not has_abc):
             regen = _regen_dynamic_weekend_options(
@@ -1503,7 +1498,7 @@ def get_coo_response(
         _is_schedule_intent(user_request)
         and _user_provided_time(user_request)
         and parsed.get("type") == "question"
-        and not _is_weekend_outing_request(user_request)
+        and not _is_direct_schedule
     ):
         regen = _regen_force_plan_direct(router, model, ctx, user_request)
         return _dump_final(regen)
