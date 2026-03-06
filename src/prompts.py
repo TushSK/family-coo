@@ -229,10 +229,29 @@ GENERAL STYLE
     lines += ["", f"USER LOCATION: {current_location}".strip()]
     lines += ["", "EXISTING CALENDAR (Busy Slots):", calendar_data if isinstance(calendar_data, str) else _to_json(calendar_data)]
     lines += ["", "PENDING EVENTS (Treat as Busy):", pending_dump if isinstance(pending_dump, str) else _to_json(pending_dump)]
+    missions_dump = str(ctx.get("missions_dump", "[]") or "[]")
+    feedback_dump = str(ctx.get("feedback_dump", "[]") or "[]")
+    avoid_ideas   = ctx.get("avoid_ideas") or []
+    turn_count    = int(ctx.get("turn_count") or 0)
+
     lines += ["", "MEMORY BANK (raw json):", memory_dump]
+    lines += ["", "PAST MISSIONS (completed/pending — use to personalise ideas):", missions_dump]
+    lines += ["", "FEEDBACK & LEARNINGS (from user — use to avoid repeating mistakes):", feedback_dump]
     lines += ["", "CHAT HISTORY (recent):", history_txt]
     lines += ["", "IDEA OPTIONS (if previously offered):", _to_json(idea_options)]
     lines += ["", "USER SELECTED IDEA (if detected):", selected_idea]
+
+    if avoid_ideas:
+        avoid_str = ", ".join(f'"{t}"' for t in avoid_ideas[:8])
+        lines += ["", f"ALREADY SHOWN TO USER — DO NOT REPEAT: {avoid_str}",
+                  "You MUST suggest different activities, venues, and time slots."]
+
+    if turn_count >= 2:
+        lines += ["",
+                  "⚠️ CONVERSATION LIMIT: This is turn 3+. You MUST resolve now.",
+                  "If user is asking for ideas: provide concrete options WITH specific times.",
+                  "Do NOT ask follow-up questions. Commit to a plan or A/B/C with full details.",
+                  "If any info is still missing, pick the most sensible default and proceed."]
 
     if continuation_hint:
         lines += ["", "CONTINUATION HINT:", continuation_hint.strip()]
@@ -270,9 +289,10 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     current_location = str(ctx.get("current_location", "") or "")
     memory_dump = str(ctx.get("memory_dump", "[]") or "[]")
     ideas_dump = str(ctx.get("ideas_dump", "[]") or "[]")
-    constraints = ctx.get("constraints", {}) or {}
-    # Variety: titles of ideas already shown (to avoid repetition)
+    missions_dump = str(ctx.get("missions_dump", "[]") or "[]")
+    feedback_dump = str(ctx.get("feedback_dump", "[]") or "[]")
     avoid_ideas = ctx.get("avoid_ideas") or []
+    constraints = ctx.get("constraints", {}) or {}
 
     schema_question = _schema_question_example()
 
@@ -285,15 +305,18 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"User location: {current_location}")
     lines.append(f"Memory bank: {memory_dump}")
-    lines.append(f"Ideas Inbox (use when relevant): {ideas_dump}")
+    lines.append(f"Past missions (use to personalise — what has this family done?): {missions_dump}")
+    lines.append(f"Feedback & learnings (avoid repeating disliked things): {feedback_dump}")
+    lines.append(f"Ideas Inbox (prioritise these when relevant): {ideas_dump}")
     lines.append(f"Constraints (MUST honor): {json.dumps(constraints, ensure_ascii=False)}")
     if avoid_ideas:
-        avoid_str = ", ".join(f'"{t}"' for t in avoid_ideas[:6])
-        lines.append(f"AVOID REPEATING (already shown to user): {avoid_str}")
-        lines.append("You MUST generate DIFFERENT activity titles and locations from the ones above.")
+        avoid_str = ", ".join(f'"{t}"' for t in avoid_ideas[:8])
+        lines.append(f"ALREADY SHOWN — DO NOT REPEAT: {avoid_str}")
+        lines.append("You MUST suggest completely different activities, venues, and time slots.")
     lines.append("")
-    lines.append(f'Task: Generate EXACTLY 3 FRESH family-friendly weekend outing options for: "{user_request}"')
-    lines.append("IMPORTANT: Rotate activity types (indoor/outdoor, active/relaxed, day/evening). Do NOT repeat previous suggestions.")
+    lines.append(f'Task: Generate EXACTLY 3 FRESH, PERSONALISED family-friendly weekend outing options for: "{user_request}"')
+    lines.append("Use missions + feedback + ideas to pick activities this specific family would enjoy.")
+    lines.append("Rotate activity types: vary indoor/outdoor, active/relaxed, morning/afternoon/evening.")
     lines.append("")
     lines.append("MANDATORY RULES:")
     lines.append('- type MUST be "question"')

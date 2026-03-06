@@ -457,6 +457,158 @@ def inject_css():
             border-radius: 12px;
         }
 
+        /* ============================================================
+           ABC CHOICE BUTTONS — always indigo, never red
+           Scoped to the .coo-abc-row marker div so other primary
+           buttons (e.g. Execute) are not affected.
+        ============================================================ */
+        .coo-abc-row .stButton > button {
+            background: #4f46e5 !important;
+            border: 1px solid #4338ca !important;
+            color: #ffffff !important;
+            border-radius: 12px !important;
+            font-weight: 800 !important;
+            height: 42px !important;
+            width: 100% !important;
+            transition: filter 0.15s ease;
+        }
+        .coo-abc-row .stButton > button:hover {
+            filter: brightness(1.1) !important;
+        }
+        .coo-abc-row .stButton > button:active {
+            filter: brightness(0.92) !important;
+        }
+
+        /* ============================================================
+           DARK MODE
+           Detects OS/browser dark preference and flips all tokens.
+        ============================================================ */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary: #818cf8;
+                --primary-light: #1e1b4b;
+                --bg-body: #0f172a;
+                --surface: #1e293b;
+                --text-main: #f1f5f9;
+                --text-muted: #94a3b8;
+                --border: #334155;
+                --success: #34d399;
+                --warning: #fbbf24;
+                --danger: #f87171;
+                --shadow-soft: 0 4px 6px -1px rgba(0,0,0,0.4), 0 2px 4px -1px rgba(0,0,0,0.3);
+                --shadow-card: 0 10px 15px -3px rgba(0,0,0,0.5), 0 4px 6px -2px rgba(0,0,0,0.3);
+            }
+
+            .stApp { background: var(--bg-body) !important; }
+
+            /* Surface cards */
+            .coo-metric-card,
+            .coo-event-card,
+            .coo-user-card,
+            .coo-status-row,
+            .coo-checkin-feedback,
+            div[data-testid="stVerticalBlock"]:has(.coo-hero-marker) {
+                background: var(--surface) !important;
+                border-color: var(--border) !important;
+                color: var(--text-main) !important;
+            }
+
+            /* Text colours */
+            .coo-evt-time, .coo-evt-title, .coo-brand-title,
+            .coo-user-name, .coo-hero-title,
+            .coo-checkin-feedback-title { color: var(--text-main) !important; }
+
+            .coo-evt-loc, .coo-user-meta, .coo-text-muted,
+            .coo-metric-label { color: var(--text-muted) !important; }
+
+            .coo-metric-value { color: var(--text-main) !important; }
+
+            /* Action required strip */
+            div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) {
+                background: #1e3a5f !important;
+                border-left-color: var(--primary) !important;
+            }
+            .coo-smartstrip-text strong { color: #93c5fd !important; }
+            .coo-smartstrip-text span   { color: #60a5fa !important; }
+
+            /* Hero divider */
+            .coo-hero-divider { background: var(--border) !important; }
+
+            /* Date badge */
+            .coo-header-date {
+                background: var(--surface) !important;
+                color: var(--text-muted) !important;
+                border-color: var(--border) !important;
+            }
+
+            /* Sidebar */
+            section[data-testid="stSidebar"] {
+                background: var(--surface) !important;
+                border-right-color: var(--border) !important;
+            }
+
+            /* Streamlit chat messages */
+            [data-testid="stChatMessage"] {
+                background: var(--surface) !important;
+                color: var(--text-main) !important;
+            }
+
+            /* Streamlit inputs + textareas */
+            .stTextArea textarea,
+            .stTextInput input {
+                background: #1e293b !important;
+                color: var(--text-main) !important;
+                border-color: var(--border) !important;
+            }
+
+            /* ABC choice buttons in dark mode */
+            .coo-abc-row .stButton > button {
+                background: #4f46e5 !important;
+                border-color: #6366f1 !important;
+                color: #ffffff !important;
+            }
+
+            /* Draft event card */
+            .coo-event-card.coo-draft {
+                background: #0f2137 !important;
+                border-color: #334155 !important;
+            }
+        }
+
+        /* ============================================================
+           MOBILE — stack two-column layout, bigger tap targets
+        ============================================================ */
+        /* Stack the main left/right columns on small screens */
+        @media (max-width: 768px) {
+            /* Force Streamlit's top-level column pair to stack */
+            section.main [data-testid="stHorizontalBlock"]:not(:has(.coo-smartstrip-left)) > [data-testid="column"] {
+                min-width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+
+            /* Bigger tap targets */
+            .stButton > button {
+                height: 48px !important;
+                font-size: 15px !important;
+            }
+
+            /* Metrics: 2-up on tablet, 1-up on phone */
+            .coo-metrics { grid-template-columns: repeat(2, 1fr) !important; gap: 12px !important; }
+        }
+        @media (max-width: 480px) {
+            .coo-metrics { grid-template-columns: 1fr !important; }
+            .block-container { padding-left: 10px !important; padding-right: 10px !important; }
+
+            /* Full-width ABC buttons stacked on phone */
+            .coo-abc-row [data-testid="column"] {
+                min-width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+
+            /* Larger emoji in chat */
+            [data-testid="stChatMessage"] { font-size: 15px !important; }
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -971,61 +1123,63 @@ def render_command_center(
         if not history:
             st.info("No messages yet. Type something and click Execute.")
         else:
-            # Find index of the LAST assistant message with A/B/C options
-            # (so we only render choice buttons once, on the most recent prompt)
-            _abc_msg_idx = -1
-            for _i, _m in enumerate(history[-12:]):
-                _c = (_m.get("content") or "")
-                if (_m.get("role") == "assistant"
-                        and "(A)" in _c and "(B)" in _c and "(C)" in _c
-                        and "schedule A" in _c.lower()):
-                    _abc_msg_idx = _i
+            import re as _re_ui
 
-            for _idx, msg in enumerate(history[-12:]):
+            # Find the LAST assistant message (in the displayed slice) that has
+            # an A/B/C option list — buttons only show on that one.
+            _slice = history[-12:]
+            _last_abc_idx = -1
+            for _i, _m in enumerate(_slice):
+                _c = (_m.get("content") or "")
+                if (
+                    (_m.get("role") or "") == "assistant"
+                    and "(A)" in _c and "(B)" in _c
+                    and "schedule a" in _c.lower()
+                ):
+                    _last_abc_idx = _i
+
+            for _msg_i, msg in enumerate(_slice):
                 role = (msg.get("role") or "assistant").strip().lower()
                 content = msg.get("content") or ""
                 if role not in ("user", "assistant"):
                     role = "assistant"
                 with st.chat_message(role):
-                    # Strip the "Reply exactly: …" line — replaced by buttons below
-                    import re as _re
-                    display_content = _re.sub(
-                        r"\n?Reply exactly:.*?schedule C[^\n]*", "", content,
-                        flags=_re.IGNORECASE
+                    # Strip "Reply exactly: …" line — replaced by buttons
+                    _display = _re_ui.sub(
+                        r"\n?Reply exactly:.*?schedule C[^\n]*",
+                        "",
+                        content,
+                        flags=_re_ui.IGNORECASE,
                     ).rstrip()
-                    display = display_content.replace("\n", "  \n")
-                    st.markdown(display)
+                    st.markdown(_display.replace("\n", "  \n"))
 
-                    # Render choice buttons only on the LAST A/B/C assistant message
-                    if role == "assistant" and _idx == _abc_msg_idx:
+                    # Render choice buttons only on the latest A/B/C message
+                    if role == "assistant" and _msg_i == _last_abc_idx:
+                        # Marker div — CSS scopes .coo-abc-row button styles to indigo
                         st.markdown(
-                            "<div style='margin-top:10px; font-size:13px; font-weight:700;"
-                            " color:#64748b;'>Choose an option:</div>",
+                            "<div class='coo-abc-row'>"
+                            "<div style='margin-top:8px; margin-bottom:4px;"
+                            " font-size:12px; font-weight:700; color:var(--text-muted);'>"
+                            "Choose an option:</div></div>",
                             unsafe_allow_html=True,
                         )
-                        _b1, _b2, _b3 = st.columns(3, gap="small")
-                        with _b1:
-                            if st.button("✅ Schedule A", key=f"abc_choice_A_{_idx}", use_container_width=True):
-                                st.session_state["plan_text"] = "schedule A"
-                                st.session_state["abc_pending_submit"] = True
+                        _bc1, _bc2, _bc3 = st.columns(3, gap="small")
+                        # All 3 use secondary (no Streamlit-red); CSS makes them indigo
+                        with _bc1:
+                            if st.button("✅ Option A", key=f"abc_btn_A_{_msg_i}",
+                                         use_container_width=True):
+                                st.session_state["_abc_choice_pending"] = "schedule A"
                                 st.rerun()
-                        with _b2:
-                            if st.button("✅ Schedule B", key=f"abc_choice_B_{_idx}", use_container_width=True):
-                                st.session_state["plan_text"] = "schedule B"
-                                st.session_state["abc_pending_submit"] = True
+                        with _bc2:
+                            if st.button("✅ Option B", key=f"abc_btn_B_{_msg_i}",
+                                         use_container_width=True):
+                                st.session_state["_abc_choice_pending"] = "schedule B"
                                 st.rerun()
-                        with _b3:
-                            if st.button("✅ Schedule C", key=f"abc_choice_C_{_idx}", use_container_width=True):
-                                st.session_state["plan_text"] = "schedule C"
-                                st.session_state["abc_pending_submit"] = True
+                        with _bc3:
+                            if st.button("✅ Option C", key=f"abc_btn_C_{_msg_i}",
+                                         use_container_width=True):
+                                st.session_state["_abc_choice_pending"] = "schedule C"
                                 st.rerun()
-
-            # Handle deferred ABC submit (must be outside the loop to avoid double-widget keys)
-            if st.session_state.get("abc_pending_submit"):
-                st.session_state["abc_pending_submit"] = False
-                if callable(submit_callback):
-                    submit_callback()
-                st.rerun()
 
         # ===== Train the Brain =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)

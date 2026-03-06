@@ -101,7 +101,7 @@ def init_state():
         "checkin_feedback_open": False,
         "checkin_feedback_text": "",
         "show_camera": False,
-        "abc_pending_submit": False,
+        "_abc_choice_pending": "",
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -306,6 +306,26 @@ def execute_plan_logic(user_text: str, image_obj=None):
     else:
         st.session_state["selected_idea"] = ""
 
+    # ---- load missions + feedback for smart brain context ----
+    missions_dump = "[]"
+    feedback_dump = "[]"
+    try:
+        from src.utils import MISSION_FILE, MEMORY_FILE
+        import json as _json2
+        def _read_json_safe(path):
+            try:
+                with open(path, encoding="utf-8") as _f:
+                    return _json2.load(_f)
+            except Exception:
+                return []
+        _missions_all = _read_json_safe(MISSION_FILE)
+        _missions_recent = [m for m in _missions_all if m.get("status") == "reviewed"][-15:]
+        missions_dump = _json2.dumps(_missions_recent, ensure_ascii=False)
+        _feedback_all = _read_json_safe(MEMORY_FILE)
+        feedback_dump = _json2.dumps(_feedback_all[-20:], ensure_ascii=False)
+    except Exception:
+        pass
+
     # ---- call brain ----
     raw = get_coo_response(
     api_key=api_key,
@@ -318,6 +338,8 @@ def execute_plan_logic(user_text: str, image_obj=None):
     current_location=st.session_state.user_location,
     ideas_summary=ideas_summary,
     ideas_dump=ideas_dump,
+    missions_dump=missions_dump,
+    feedback_dump=feedback_dump,
 
     # ✅ 2.8A continuity wiring (deterministic)
     idea_options=st.session_state.get("idea_options") or [],
@@ -441,6 +463,17 @@ def apply_deferred_ui_resets():
     Must be called early in app.py (before render_command_center).
     """
     import streamlit as st
+
+    # BUG-12: ABC buttons cannot write to plan_text (widget key) after widget
+    # is created. Buttons write to _abc_choice_pending instead; we copy here
+    # BEFORE any widget is instantiated.
+    _pending_choice = st.session_state.get("_abc_choice_pending", "")
+    if _pending_choice:
+        st.session_state["plan_text"] = _pending_choice
+        st.session_state["_abc_choice_pending"] = ""
+        execute_plan_logic(_pending_choice)
+        st.session_state["clear_plan_text"] = True
+        return
 
     if st.session_state.get("defer_train_brain_reset"):
         # These keys are used by widgets; safe ONLY before widgets are created.

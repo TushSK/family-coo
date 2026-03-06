@@ -768,31 +768,19 @@ def _dead_end_output(parsed: Dict[str, Any], user_request: str = "") -> bool:
 
 
 def _extract_shown_idea_titles(chat_history: List[Dict[str, Any]]) -> List[str]:
-    """
-    Scan chat history for assistant messages containing A/B/C option lists.
-    Returns all previously displayed option titles to avoid repeating them.
-    """
+    """Return all A/B/C option titles shown in chat history (to avoid repeating)."""
     titles: List[str] = []
     for msg in (chat_history or []):
         try:
             if (msg.get("role") or "").lower() != "assistant":
                 continue
-            txt = msg.get("content") or ""
-            # Match lines like "(A) Hillsborough River State Park Hike"
-            for m in re.finditer(r"\([A-C]\)\s+([^\n]+)", txt):
+            for m in re.finditer(r"\([A-C]\)\s+([^\n]+)", msg.get("content") or ""):
                 t = m.group(1).strip()
-                if t and t.lower() != "custom" and len(t) > 3:
+                if t and t.lower() != "custom" and len(t) > 3 and t not in titles:
                     titles.append(t)
         except Exception:
             continue
-    # Deduplicate preserving order
-    seen: set = set()
-    out: List[str] = []
-    for t in titles:
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
+    return titles
 
 
 def _regen_dynamic_weekend_options(
@@ -803,6 +791,8 @@ def _regen_dynamic_weekend_options(
     memory_dump: str,
     ideas_dump: str,
     chat_history: Optional[List[Dict[str, Any]]] = None,
+    missions_dump: str = "[]",
+    feedback_dump: str = "[]",
 ) -> Dict[str, Any]:
     avoid_ideas = _extract_shown_idea_titles(chat_history or [])
     prompt = build_weekend_regen_prompt({
@@ -811,6 +801,8 @@ def _regen_dynamic_weekend_options(
         "memory_dump": memory_dump or "[]",
         "ideas_dump": ideas_dump or "[]",
         "avoid_ideas": avoid_ideas,
+        "missions_dump": missions_dump,
+        "feedback_dump": feedback_dump,
     })
 
     try:
@@ -1163,7 +1155,8 @@ def get_coo_response(
     ideas_summary: Optional[List[Dict[str, Any]]] = None,
     idea_options: Optional[List[Dict[str, Any]]] = None,
     selected_idea: str = "",
-
+    missions_dump: str = "[]",   # recent completed/pending missions for context
+    feedback_dump: str = "[]",   # recent feedback/learnings for context
 ) -> str:
     """
     Main Brain call. Returns STRICT JSON string only.
@@ -1317,6 +1310,23 @@ def get_coo_response(
             ideas_summary = []
     ideas_dump = _safe_json_dumps(ideas_summary, default="[]")
 
+    # Count how many question turns have already happened in this thread
+    # so prompts can enforce max-3-turn resolution
+    _turn_count = sum(
+        1 for m in (chat_history or [])
+        if (m.get("role") == "assistant") and ("(A)" in (m.get("content") or ""))
+    )
+
+    # Titles already shown to avoid repeating
+    _avoid_shown: List[str] = []
+    for _m in (chat_history or []):
+        if (_m.get("role") or "") != "assistant":
+            continue
+        for _match in re.finditer(r"\([A-C]\)\s+([^\n]+)", (_m.get("content") or "")):
+            _t = _match.group(1).strip()
+            if _t and _t.lower() != "custom" and len(_t) > 3 and _t not in _avoid_shown:
+                _avoid_shown.append(_t)
+
     ctx: Dict[str, Any] = {
         "current_time_str": current_time_str,
         "cheat_sheet": cheat_sheet,
@@ -1332,6 +1342,10 @@ def get_coo_response(
         "user_request": user_request,
         "ideas_summary": ideas_summary,
         "ideas_dump": ideas_dump,
+        "missions_dump": missions_dump,
+        "feedback_dump": feedback_dump,
+        "avoid_ideas": _avoid_shown,
+        "turn_count": _turn_count,
     }
 
     # Optional: memory summary (safe, no file I/O assumptions)
@@ -1475,6 +1489,8 @@ def get_coo_response(
                 memory_dump=memory_dump,
                 ideas_dump=ideas_dump,
                 chat_history=chat_history,
+                missions_dump=ctx.get("missions_dump", "[]"),
+                feedback_dump=ctx.get("feedback_dump", "[]"),
             )
             return _dump_final(regen)
 
