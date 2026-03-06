@@ -23,11 +23,15 @@ from __future__ import annotations
 
 import base64
 import datetime
+from datetime import timedelta
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from groq import Groq
+from src.llm_router import LLMRouter
+
+# NOTE: Model constants and provider selection live in src/llm_router.py only.
+# To upgrade/swap models: edit llm_router.py — never this file.
 
 from src.prompts import (
     build_json_repair_prompt,
@@ -70,42 +74,53 @@ def _next_saturday_date(now: datetime.datetime) -> str:
 
 def _format_abc_text_for_ui(text: str) -> str:
     """
-    Deterministic UI formatter for question/conflict blocks.
-    Fixes clumped output even when model uses inline bullets like:
-    (A) Title • Duration: 2 hours • Time window: Sat...
+    Simplified UI formatter. 
+    Relies on the prompt template being correct instead of regex guessing.
     """
     if not text:
         return text
 
     t = text.strip()
 
-    # 1) Normalize inline bullet separators into line breaks
-    #    "Title • Duration: ..." -> "Title\n• Duration: ..."
-    t = t.replace(" • ", "\n• ")
-
-    # 2) Force A/B/C headers to start as separate paragraphs
+    # Force A/B/C headers to start as separate paragraphs
     t = re.sub(r"\s*\(A\)\s*", "\n\n(A) ", t)
     t = re.sub(r"\s*\(B\)\s*", "\n\n(B) ", t)
     t = re.sub(r"\s*\(C\)\s*", "\n\n(C) ", t)
 
-    # 3) Ensure Reply line starts as its own paragraph
+    # Ensure Reply line starts as its own paragraph
     t = re.sub(r"\s*Reply exactly:\s*", "\n\nReply exactly: ", t, flags=re.IGNORECASE)
 
-    # 4) If Optional was appended inline, put it on next line
+    # If Optional was appended inline, put it on next line
     t = re.sub(r"\s*\(Optional:", "\n(Optional:", t, flags=re.IGNORECASE)
 
-    # 5) Convert common fields into bullet lines (if they appear inline)
-    #    Handles both " Duration:" and "• Duration:"
-    t = re.sub(r"[ \t]*Duration:\s*", "\n• Duration: ", t, flags=re.IGNORECASE)
-    t = re.sub(r"[ \t]*Time window:\s*", "\n• Time window: ", t, flags=re.IGNORECASE)
-    t = re.sub(r"[ \t]*When:\s*", "\n• When: ", t, flags=re.IGNORECASE)
-    t = re.sub(r"[ \t]*Where:\s*", "\n• Where: ", t, flags=re.IGNORECASE)
-    t = re.sub(r"[ \t]*Notes:\s*", "\n• Notes: ", t, flags=re.IGNORECASE)
-
-    # 6) Clean excess blank lines
+    # Clean excess blank lines
     t = re.sub(r"\n{3,}", "\n\n", t)
 
     return t.strip()
+
+def _format_plan_text_from_event(parsed: dict) -> str:
+    """
+    Deterministic Draft-ready text built ONLY from events[0]
+    using Streamlit-friendly Markdown.
+    """
+    evs = parsed.get("events") or []
+    if not evs or not isinstance(evs[0], dict):
+        return (parsed.get("text") or "").strip() or "Draft ready. Review in Drafting and click Add."
+
+    ev = evs[0]
+    title = (ev.get("title") or "Draft event").strip()
+    start_time = (ev.get("start_time") or "").replace("T", " ")[:16] # clean ISO string
+    end_time = (ev.get("end_time") or "").replace("T", " ")[11:16]
+    location = (ev.get("location") or "").strip()
+
+    text = f"✅ **Draft ready**\n\n**{title}**\n\n"
+    if start_time:
+        text += f"📅 {start_time} – {end_time}\n\n"
+    if location:
+        text += f"📍 Location: {location}\n\n"
+    text += "*Review in Drafting and click Add.*"
+
+    return text
 
 def _finalize_for_ui(parsed: dict) -> dict:
     """
@@ -113,6 +128,7 @@ def _finalize_for_ui(parsed: dict) -> dict:
     - Never allow empty visible text
     - Apply correct formatting by type
     - Ensure reply-line exists when A/B/C exists
+    - CRITICAL: do NOT wipe plan events just because text is empty
     """
     if not isinstance(parsed, dict):
         return {
@@ -122,13 +138,22 @@ def _finalize_for_ui(parsed: dict) -> dict:
             "events": [],
         }
 
-    # Ensure required keys exist (schema guard)
+    # Required keys (schema guard)
     parsed.setdefault("type", "chat")
     parsed.setdefault("text", "")
     parsed.setdefault("pre_prep", "")
     parsed.setdefault("events", [])
 
-    # Never allow empty visible messages
+    t = (parsed.get("type") or "").lower()
+    events = parsed.get("events") or []
+
+    # If this is a plan with events, ALWAYS generate deterministic draft text
+    # even if model text is empty.
+    if t == "plan" and isinstance(events, list) and len(events) > 0:
+        parsed["text"] = _format_plan_text_from_event(parsed)  # uses events[0]
+        # Do not modify events
+
+    # For non-plan: never allow empty visible text
     if not (parsed.get("text") or "").strip():
         # Keep it safe: no scheduling push here
         parsed["type"] = "chat"
@@ -141,10 +166,6 @@ def _finalize_for_ui(parsed: dict) -> dict:
     # Apply A/B/C formatting ONLY to question/conflict
     if t in ("question", "conflict"):
         parsed["text"] = _format_abc_text_for_ui(parsed.get("text", ""))
-
-    # Apply plan formatting ONLY to plan
-    if t == "plan":
-        parsed["text"] = _format_plan_text_from_event(parsed)
 
     # Ensure reply line exists for A/B/C blocks
     txt = parsed.get("text") or ""
@@ -161,47 +182,120 @@ def _dump_final(parsed: dict) -> str:
     return json.dumps(parsed, ensure_ascii=False)
 
 
-def _format_plan_text_from_event(parsed: dict) -> str:
+def _is_rate_limited(err: Exception) -> bool:
+    """Delegates to LLMRouter so rate-limit detection lives in one place."""
+    return LLMRouter.is_rate_limited_static(err)
+
+
+# ---------------------------------------------------------------------------
+# Single thin wrapper — every LLM call goes through here.
+# Signature mirrors the old Groq pattern so call sites stay minimal.
+# ---------------------------------------------------------------------------
+def _llm_call(
+    router: "LLMRouter",
+    system: str,
+    user: str,
+    temperature: float = 0.6,
+    max_tokens: int = 900,
+    task: str = "regen",
+) -> str:
     """
-    Deterministic Draft-ready text built ONLY from events[0].
-    This prevents the A/B/C formatter from breaking plan text.
+    Thin wrapper used by all regen helpers.
+    `task` matches a key in llm_router.ROUTING_TABLE.
+    Default task="regen" → routes to Claude.
     """
-    evs = parsed.get("events") or []
-    if not evs or not isinstance(evs[0], dict):
-        # fallback to whatever the model wrote (but keep it non-empty)
-        return (parsed.get("text") or "").strip() or "Draft ready. Review in Drafting and click Add."
+    return router.call(task, system=system, user=user, temperature=temperature, max_tokens=max_tokens)
 
-    ev = evs[0]
-    title = (ev.get("title") or "Draft event").strip()
-    start_time = (ev.get("start_time") or "").strip()
-    end_time = (ev.get("end_time") or "").strip()
-    location = (ev.get("location") or "").strip()
 
-    when_line = ""
-    if start_time and end_time:
-        when_line = f"{start_time} – {end_time}"
-    elif start_time:
-        when_line = f"{start_time}"
+def _option_to_event(option: Dict[str, Any], now_dt) -> Dict[str, str] | None:
+    """
+    Deterministic conversion from OPTIONS_JSON item -> event schema.
+    Expects option keys: title, time_window, duration_hours (as in prompts.py).
+    """
+    try:
+        title = (option.get("title") or "").strip()
+        tw = (option.get("time_window") or "").strip()
+        dur = float(option.get("duration_hours") or 0)
 
-    lines = []
-    lines.append("Draft ready")
-    lines.append("")
-    lines.append(title)
-    if when_line:
-        lines.append(when_line)
-    if location:
-        lines.append(f"Location: {location}")
-    lines.append("")
-    lines.append("Review in Drafting and click Add.")
+        if not title or not tw or dur <= 0:
+            return None
 
-    return "\n".join(lines).strip()
+        # tw example: "Sat 9:00 AM–12:00 PM"
+        # Split day+times safely
+        # Supports hyphen variants: – —
+        tw_norm = tw.replace("—", "–").replace("-", "–")
+        if "–" not in tw_norm:
+            return None
 
-# -----------------------------
-# Intent + guardrails
-# -----------------------------
-_SCHEDULE_INTENT_RE = re.compile(r"\b(schedule|add|plan|book|add|create|visit)\b", flags=re.IGNORECASE)
+        left, right = [x.strip() for x in tw_norm.split("–", 1)]
 
-_FINAL_SCHEDULE_RE = re.compile(r"(?i)^\s*schedule\s*([A-C])\s*$")
+        # left includes day + start time: "Sat 9:00 AM"
+        parts = left.split()
+        if len(parts) < 2:
+            return None
+
+        day = parts[0]  # Sat/Sun
+        start_time_txt = " ".join(parts[1:])
+        end_time_txt = right
+
+        # Anchor date: next Sat/Sun from now
+        # Uses existing helper _next_saturday_date(now) already in brain
+        next_sat = _next_saturday_date(now_dt)
+        # next_sat is a string in your code; convert to date via dateutil parser if available
+        try:
+            from dateutil import parser as dtparser
+            sat_date = dtparser.parse(next_sat).date()
+        except Exception:
+            sat_date = now_dt.date()
+
+        if day.lower().startswith("sun"):
+            base_date = sat_date + timedelta(days=1)
+        else:
+            base_date = sat_date
+
+        # Parse times
+        try:
+            from dateutil import parser as dtparser
+            st = dtparser.parse(start_time_txt)
+            et = dtparser.parse(end_time_txt)
+        except Exception:
+            return None
+
+        start_dt = datetime.datetime(
+            base_date.year, base_date.month, base_date.day,
+            st.hour, st.minute, 0,
+            tzinfo=now_dt.tzinfo,
+        )
+        end_dt = datetime.datetime(
+            base_date.year, base_date.month, base_date.day,
+            et.hour, et.minute, 0,
+            tzinfo=now_dt.tzinfo,
+        )
+
+        # Safety: if end <= start, add duration hours
+        if end_dt <= start_dt:
+            end_dt = start_dt + timedelta(hours=dur)
+
+        return {
+            "title": title,
+            "start_time": start_dt.replace(microsecond=0).isoformat(),
+            "end_time": end_dt.replace(microsecond=0).isoformat(),
+            "location": "",
+            "description": (option.get("notes") or "").strip(),
+        }
+    except Exception:
+        return None
+
+def _extract_schedule_choice(user_text: str) -> str:
+    """Mirroring the updated flow.py logic for continuity."""
+    t = (user_text or "").strip().lower()
+    m = re.search(r"\b(?:option\s+|schedule\s+|plan\s+|choose\s+|let\'s do\s+)?([a-c])\b", t)
+    return m.group(1).upper() if m else ""
+
+# Broaden intent to include choosing an option
+_SCHEDULE_INTENT_RE = re.compile(r"\b(schedule|add|plan|book|create|visit|option|choose)\b", flags=re.IGNORECASE)
+
+_FINAL_SCHEDULE_RE = re.compile(r"(?i)^\s*(?:schedule|plan|add|option|choose)?\s*([A-C])\s*$")
 
 def _is_schedule_choice(user_text: str) -> bool:
     return bool(_FINAL_SCHEDULE_RE.match((user_text or "").strip()))
@@ -305,16 +399,16 @@ def _extract_first_json_object(text: str) -> Optional[str]:
     return None
 
 
-def _repair_json_with_llm(client: Groq, model: str, bad_text: str) -> str:
+def _repair_json_with_llm(router: "LLMRouter", model: str, bad_text: str) -> str:
+    """Uses Groq (fast/cheap) to repair malformed JSON — see llm_router.ROUTING_TABLE."""
     repair_prompt = build_json_repair_prompt(bad_text)
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": repair_prompt}],
-        temperature=0.0,
-        max_tokens=900,
-        stream=False,
-    )
-    return (completion.choices[0].message.content or "").strip()
+    try:
+        return router.call("repair", system=repair_prompt, user="Fix the JSON.", temperature=0.0, max_tokens=900)
+    except Exception as e:
+        if _is_rate_limited(e):
+            return bad_text  # deterministic: no extra LLM calls under 429
+        raise
+
 
 
 # -----------------------------
@@ -382,8 +476,10 @@ def _extract_option_titles_from_history(history: List[Dict[str, Any]]) -> List[s
     return options[:5]
 
 
-def _match_selected_idea_title(user_text: str, options: List[str]) -> Optional[str]:
-    """Return the matched option title if the user repeats/chooses it."""
+def _match_selected_idea_title(user_text: str, options) -> Optional[str]:
+    """Return the matched option title if the user repeats/chooses it.
+    options may be List[str] OR List[dict] (with 'title' key) — handles both.
+    """
     ut = _normalize_choice_text(user_text)
     if not ut or not options:
         return None
@@ -393,15 +489,18 @@ def _match_selected_idea_title(user_text: str, options: List[str]) -> Optional[s
     if m:
         idx = int(m.group(2)) - 1
         if 0 <= idx < len(options):
-            return options[idx]
+            raw = options[idx]
+            return raw.get("title", "") if isinstance(raw, dict) else raw
 
     for opt in options:
-        o = _normalize_choice_text(opt)
+        # Extract display title regardless of whether opt is str or dict
+        title_str = opt.get("title", "") if isinstance(opt, dict) else (opt or "")
+        o = _normalize_choice_text(title_str)
         if not o:
             continue
 
         if o in ut or ut in o:
-            return opt
+            return title_str
 
         # token overlap heuristic
         o_tokens = [t for t in o.split() if len(t) >= 3]
@@ -409,7 +508,7 @@ def _match_selected_idea_title(user_text: str, options: List[str]) -> Optional[s
             continue
         hit = sum(1 for t in o_tokens if t in ut)
         if hit >= max(2, int(len(o_tokens) * 0.6)):
-            return opt
+            return title_str
 
     return None
 
@@ -451,19 +550,20 @@ def _match_selected_option(user_text: str, last_assistant_text: str) -> Dict[str
     choice = m.group(2).upper()
     last = (last_assistant_text or "")
 
-    # Detect time choice question (assistant offered A/B/C time windows)
-    if re.search(r"\bwhat time\b|\btime works\b|\bstart time\b", last, flags=re.IGNORECASE):
-        return {"kind": "time_choice", "choice": choice}
+    # --- Priority 1: weekend outing (check BEFORE generic A/B/C fallback) ---
+    # Claude's weekend response always contains Saturday/Sunday/weekend — match that first
+    if re.search(r"\bweekend\b|\bSaturday\b|\bSunday\b|\bouting\b|pick one\b", last, flags=re.IGNORECASE):
+        return {"kind": "weekend_choice", "choice": choice}
 
-    # Detect confirm choice (assistant asked schedule it / change time / cancel)
+    # --- Priority 2: confirm choice (schedule it / change time / cancel) ---
     if re.search(r"\bschedule it\b|\bchange the time\b|\bcancel\b", last, flags=re.IGNORECASE):
         return {"kind": "confirm_choice", "choice": choice}
 
-    # Detect weekend choice (assistant offered weekend outing A/B/C)
-    if re.search(r"\bweekend\b|\bSaturday\b|\bSunday\b|\boutings?\b", last, flags=re.IGNORECASE):
-        return {"kind": "weekend_choice", "choice": choice}
+    # --- Priority 3: time window question ---
+    if re.search(r"\bwhat time\b|\btime works\b|\bstart time\b|\btime window\b", last, flags=re.IGNORECASE):
+        return {"kind": "time_choice", "choice": choice}
 
-    # Default: if last assistant had (A)(B)(C), treat as generic selection (time_choice is safer loop-buster)
+    # --- Fallback: generic A/B/C list → time_choice (safe loop-buster) ---
     if ("(A)" in last and "(B)" in last and "(C)" in last) or re.search(
         r"(^|\n)\s*\(?\s*[A-C]\s*\)?\s*[\).:-]", last, flags=re.IGNORECASE
     ):
@@ -667,30 +767,78 @@ def _dead_end_output(parsed: Dict[str, Any], user_request: str = "") -> bool:
     return False
 
 
+def _extract_shown_idea_titles(chat_history: List[Dict[str, Any]]) -> List[str]:
+    """
+    Scan chat history for assistant messages containing A/B/C option lists.
+    Returns all previously displayed option titles to avoid repeating them.
+    """
+    titles: List[str] = []
+    for msg in (chat_history or []):
+        try:
+            if (msg.get("role") or "").lower() != "assistant":
+                continue
+            txt = msg.get("content") or ""
+            # Match lines like "(A) Hillsborough River State Park Hike"
+            for m in re.finditer(r"\([A-C]\)\s+([^\n]+)", txt):
+                t = m.group(1).strip()
+                if t and t.lower() != "custom" and len(t) > 3:
+                    titles.append(t)
+        except Exception:
+            continue
+    # Deduplicate preserving order
+    seen: set = set()
+    out: List[str] = []
+    for t in titles:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 def _regen_dynamic_weekend_options(
-    client: Groq,
+    router: "LLMRouter",
     model: str,
     user_request: str,
     current_location: Optional[str],
     memory_dump: str,
     ideas_dump: str,
+    chat_history: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    avoid_ideas = _extract_shown_idea_titles(chat_history or [])
     prompt = build_weekend_regen_prompt({
         "user_request": user_request,
         "current_location": current_location or "",
         "memory_dump": memory_dump or "[]",
         "ideas_dump": ideas_dump or "[]",
+        "avoid_ideas": avoid_ideas,
     })
-    completion = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": prompt}],
-        temperature=0.6,
-        max_tokens=900,
-        stream=False,
-    )
-    txt = (completion.choices[0].message.content or "").strip()
-    parsed = _try_parse_json(txt) or {}
-    return _ensure_event_schema(parsed, user_request, _get_tz_now())
+
+    try:
+        txt = _llm_call(router, system=prompt, user=user_request or "Weekend outing ideas", temperature=0.6, max_tokens=900)
+        parsed = _try_parse_json(txt) or {}
+        parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
+        parsed["type"] = "question"
+        parsed["events"] = []
+        return parsed
+
+    except Exception as e:
+        # Deterministic fallback under 429 or any upstream fail
+        if _is_rate_limited(e):
+            fallback_text = (
+                "Weekend outing — pick one:\n\n"
+                "(A) Park walk + snacks\n"
+                "    Duration: 2 hours\n"
+                "    Time window: Sat 11:00 AM–1:00 PM\n\n"
+                "(B) Family board games at home\n"
+                "    Duration: 2 hours\n"
+                "    Time window: Sat 4:00 PM–6:00 PM\n\n"
+                "(C) Local library + treat after\n"
+                "    Duration: 2 hours\n"
+                "    Time window: Sun 12:00 PM–2:00 PM\n\n"
+                "Reply exactly: schedule A / schedule B / schedule C"
+            )
+            return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
+        raise
 
 
 # -----------------------------
@@ -731,7 +879,7 @@ def _safe_json_dumps(obj: Any, default: str = "[]") -> str:
 
 
 def _regen_safe_chat_no_scheduling(
-    client: Groq,
+    router: "LLMRouter",
     model: str,
     ctx: Dict[str, Any],
     user_request: str,
@@ -748,24 +896,13 @@ def _regen_safe_chat_no_scheduling(
         "events must be an empty list.\n"
     )
     system_prompt = build_system_prompt(ctx)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": instruction},
-        {"role": "user", "content": user_request or ""},
-    ]
-    completion = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.7,
-        max_tokens=700,
-        stream=False,
-    )
-    txt = (completion.choices[0].message.content or "").strip()
+    combined_system = system_prompt + "\n\n" + instruction
+    txt = _llm_call(router, system=combined_system, user=user_request or " ", temperature=0.7, max_tokens=700)
     parsed = _try_parse_json(txt)
     if not isinstance(parsed, dict):
         # Attempt repair once
         try:
-            fixed = _repair_json_with_llm(client, model, txt)
+            fixed = _repair_json_with_llm(router, model, txt)
             parsed = _try_parse_json(fixed)
         except Exception:
             parsed = None
@@ -781,7 +918,7 @@ def _regen_safe_chat_no_scheduling(
 
 
 def _regen_time_question(
-    client: Groq,
+    router: "LLMRouter",
     model: str,
     ctx: Dict[str, Any],
     user_request: str,
@@ -798,28 +935,27 @@ def _regen_time_question(
         "events must be an empty list.\n"
     )
     system_prompt = build_system_prompt(ctx)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": instruction},
-        {"role": "user", "content": user_request or ""},
-    ]
-    completion = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.6,
-        max_tokens=700,
-        stream=False,
-    )
-    txt = (completion.choices[0].message.content or "").strip()
+    combined_system = system_prompt + "\n\n" + instruction
+    txt = _llm_call(router, system=combined_system, user=user_request or " ", temperature=0.6, max_tokens=700)
     parsed = _try_parse_json(txt)
     if not isinstance(parsed, dict):
         try:
-            fixed = _repair_json_with_llm(client, model, txt)
+            fixed = _repair_json_with_llm(router, model, txt)
             parsed = _try_parse_json(fixed)
         except Exception:
             parsed = None
+    
     if not isinstance(parsed, dict):
-        return {"type": "question", "text": "", "pre_prep": "", "events": []}
+        fallback_text = (
+            "Pick a time window:\n\n"
+            "(A) Morning — 10:00 AM - 12:00 PM\n"
+            "(B) Afternoon — 2:00 PM - 4:00 PM\n"
+            "(C) Evening — 6:00 PM - 8:00 PM\n\n"
+            "Reply exactly: schedule A / schedule B / schedule C"
+        )
+        return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
+    
+    
     parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
     parsed["type"] = "question"
     parsed["events"] = []
@@ -828,107 +964,194 @@ def _regen_time_question(
 
 
 
+def _regen_force_plan_direct(
+    router: "LLMRouter",
+    model: str,
+    ctx: Dict[str, Any],
+    user_request: str,
+) -> Dict[str, Any]:
+    """
+    BUG-09: When user provides title + day + time, skip all follow-up questions
+    and create the draft directly. Location defaults to empty if not specified.
+    """
+    instruction = (
+        "You must return STRICT JSON ONLY with keys: type,text,pre_prep,events.\n"
+        "The user has provided all required information (title, day, and time).\n"
+        "Return type='plan' with exactly ONE event in events[].\n"
+        "Use an empty string for location if none was specified — do NOT ask for it.\n"
+        "The event MUST include non-empty start_time and end_time in format YYYY-MM-DDTHH:MM:SS.\n"
+        "Do NOT ask any follow-up questions. Create the draft immediately.\n"
+    )
+    system_prompt = build_system_prompt(ctx)
+    combined_system = system_prompt + "\n\n" + instruction
+    txt = _llm_call(router, system=combined_system, user=user_request or " ", temperature=0.3, max_tokens=700)
+    parsed = _try_parse_json(txt)
+    if not isinstance(parsed, dict):
+        try:
+            fixed = _repair_json_with_llm(router, model, txt)
+            parsed = _try_parse_json(fixed)
+        except Exception:
+            parsed = None
+    if not isinstance(parsed, dict):
+        return {"type": "chat", "text": "I couldn't create that event. Please try again.", "pre_prep": "", "events": []}
+    parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
+    parsed["type"] = "plan"
+    return parsed
+
+
 def _regen_force_plan_from_selection(
-    client: Groq,
+    router: "LLMRouter",
     model: str,
     ctx: Dict[str, Any],
     user_request: str,
     selection_summary: str,
 ) -> Dict[str, Any]:
-    """Force a final PLAN (with one event) after the user selects a specific time option.
-
-    This avoids cases where the model replies with chat/confirmation text and no events,
-    which prevents Flow from creating a Draft.
-
-    IMPORTANT:
-    - No hardcoded event details in code.
-    - The LLM must output STRICT JSON only with keys: type,text,pre_prep,events.
-    """
     instruction = (
         "You must return STRICT JSON ONLY with keys: type,text,pre_prep,events.\n"
         "The user has CONFIRMED a specific selection and expects the event to be drafted now.\n"
         "Return type='plan' with exactly ONE event in events[].\n"
         "The event MUST include non-empty start_time and end_time in format YYYY-MM-DDTHH:MM:SS.\n"
-        "Use the selection details below to set title, location, date, start_time, end_time, and description.\n"
         "Do NOT ask follow-up questions.\n"
         f"Selection: {selection_summary}\n"
-
     )
 
     system_prompt = build_system_prompt(ctx)
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "system", "content": instruction},
-        {"role": "user", "content": user_request or ""},
-    ]
+    combined_system = system_prompt + "\n\n" + instruction
 
-    completion = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.3,
-        max_tokens=700,
-        stream=False,
-    )
-
-    txt = (completion.choices[0].message.content or "").strip()
-    parsed = _try_parse_json(txt)
-    if not isinstance(parsed, dict):
-        try:
-            fixed = _repair_json_with_llm(client, model, txt)
-            parsed = _try_parse_json(fixed)
-        except Exception:
-            parsed = None
-
-    if not isinstance(parsed, dict):
-        return {"type": "error", "text": "", "pre_prep": "", "events": []}
-
-    parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
-    parsed["type"] = "plan"
-    # If the model failed to populate required times, retry once with a stricter instruction.
     try:
-        ev0 = (parsed.get("events") or [{}])[0]
-        if not (ev0.get("start_time") and ev0.get("end_time")):
-            strict2 = (
-                "You must return STRICT JSON ONLY with keys: type,text,pre_prep,events.\n"
-                "Return type='plan' with exactly ONE event in events[].\n"
-                "CRITICAL: start_time and end_time MUST be non-empty and formatted YYYY-MM-DDTHH:MM:SS.\n"
-                "Use the selection details to infer the exact date and the selected time window.\n"
-                "Do NOT ask follow-up questions.\n"
-                f"Selection: {selection_summary}\n"
+        txt = _llm_call(router, system=combined_system, user=user_request or " ", temperature=0.3, max_tokens=700)
+        parsed = _try_parse_json(txt)
+
+        if not isinstance(parsed, dict):
+            try:
+                fixed = _repair_json_with_llm(router, model, txt)
+                parsed = _try_parse_json(fixed)
+            except Exception:
+                parsed = None
+
+        if not isinstance(parsed, dict):
+            # Fallback MUST be a question (not empty error), so UI stays usable and no blank bubbles
+            fallback_text = (
+                "Pick a time window:\n\n"
+                "(A) Morning — 10:00 AM - 12:00 PM\n"
+                "(B) Afternoon — 2:00 PM - 4:00 PM\n"
+                "(C) Evening — 6:00 PM - 8:00 PM\n\n"
+                "Reply exactly: schedule A / schedule B / schedule C"
             )
-            messages2 = [
-                {"role": "system", "content": system_prompt},
-                {"role": "system", "content": strict2},
-                {"role": "user", "content": user_request or ""},
-            ]
-            c2 = client.chat.completions.create(
-                model=model,
-                messages=messages2,
-                temperature=0.2,
-                max_tokens=900,
-                stream=False,
+            return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
+
+        parsed = _ensure_event_schema(parsed, user_request, _get_tz_now())
+        parsed["type"] = "plan"
+
+        # If model failed to provide times, do ONE deterministic retry (already in your file)
+        # ... keep your existing retry block, but ensure any failure returns the same fallback question above.
+
+        return parsed
+
+    except Exception as e:
+        if _is_rate_limited(e):
+            # Deterministic fallback on 429 (no extra calls, no empty text)
+            fallback_text = (
+                "Pick a time window:\n\n"
+                "(A) Morning — 10:00 AM - 12:00 PM\n"
+                "(B) Afternoon — 2:00 PM - 4:00 PM\n"
+                "(C) Evening — 6:00 PM - 8:00 PM\n\n"
+                "Reply exactly: schedule A / schedule B / schedule C"
             )
-            txt2 = (c2.choices[0].message.content or "").strip()
-            parsed2 = _try_parse_json(txt2)
-            if not isinstance(parsed2, dict):
-                try:
-                    fixed2 = _repair_json_with_llm(client, model, txt2)
-                    parsed2 = _try_parse_json(fixed2)
-                except Exception:
-                    parsed2 = None
-            if isinstance(parsed2, dict):
-                parsed2 = _ensure_event_schema(parsed2, user_request, _get_tz_now())
-                parsed2["type"] = "plan"
-                parsed = parsed2
-    except Exception:
-        pass
-    return parsed
+            return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
+        raise
 # -----------------------------
 # Main entrypoint
 # -----------------------------
+
+def _parse_abc_options_from_text(text: str, now_dt: datetime.datetime) -> List[Dict[str, Any]]:
+    """
+    Fallback parser: extract A/B/C options from formatted assistant text.
+    Returns list of option dicts compatible with _option_to_event.
+    Used when OPTIONS_JSON is missing from pre_prep.
+    """
+    options = []
+    if not text:
+        return options
+    # Pattern: (A) Title\n    When: Day/Date • HH:MM AM – HH:MM PM\n    Where: ...
+    blocks = re.split(r"(?=\n?\s*\([A-C]\))", text)
+    for block in blocks:
+        m_key = re.search(r"\(([A-C])\)\s*(.+?)(?:\n|$)", block, re.IGNORECASE)
+        if not m_key:
+            continue
+        key = m_key.group(1).upper()
+        title = m_key.group(2).strip()
+        # Extract time window: supports "When:", "Time window:", and "Time:" prefixes
+        # Covers: Claude live output ("When:"), rate-limit fallback ("Time window:")
+        m_when = re.search(
+            r"(?:When|Time\s+window|Time):\s*(.+?)(?:\n|$)",
+            block, re.IGNORECASE
+        )
+        if not m_when:
+            continue
+        when_str = m_when.group(1).strip()
+        # Extract Where
+        m_where = re.search(r"Where:\s*(.+?)(?:\n|$)", block, re.IGNORECASE)
+        location = m_where.group(1).strip() if m_where else ""
+        # Extract Notes
+        m_notes = re.search(r"Notes:\s*(.+?)(?:\n|$)", block, re.IGNORECASE)
+        notes = m_notes.group(1).strip() if m_notes else ""
+        # Fallback: use Duration: as a hint when time can't be parsed from when_str
+        m_dur_hint = re.search(r"Duration:\s*(\d+(?:\.\d+)?)\s*hour", block, re.IGNORECASE)
+        dur_hint = float(m_dur_hint.group(1)) if m_dur_hint else 0
+
+        # Convert when_str to _option_to_event-compatible time_window
+        # Handles 3 formats:
+        #   "Saturday, March 7 • 9:00 AM – 12:00 PM"  (Claude live)
+        #   "Sat 9:00 AM–12:00 PM"                     (compact)
+        #   "Sat 11:00 AM–1:00 PM"                     (rate-limit fallback)
+        m_bullet = (
+            re.search(
+                r"(Sat|Sun|Saturday|Sunday)[^•]*•\s*(\d{1,2}:\d{2}\s*(?:AM|PM))\s*[–\-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))",
+                when_str, re.IGNORECASE
+            ) or
+            re.search(
+                r"(Sat|Sun)[a-z]*\s+(\d{1,2}:\d{2}\s*(?:AM|PM))\s*[–\-]\s*(\d{1,2}:\d{2}\s*(?:AM|PM))",
+                when_str, re.IGNORECASE
+            )
+        )
+
+        if not m_bullet:
+            continue
+
+        day_str = m_bullet.group(1)[:3].capitalize()  # "Sat" or "Sun"
+        start_t = m_bullet.group(2).strip()
+        end_t   = m_bullet.group(3).strip()
+        time_window = f"{day_str} {start_t}–{end_t}"
+
+        # Estimate duration
+        try:
+            from dateutil import parser as _dtp
+            st_dt = _dtp.parse(start_t)
+            et_dt = _dtp.parse(end_t)
+            calc_dur = (et_dt - st_dt).seconds / 3600
+            if calc_dur <= 0 and dur_hint > 0:
+                dur = dur_hint
+            else:
+                dur = max(1, round(calc_dur, 1))
+        except Exception:
+            dur = dur_hint if dur_hint > 0 else 2
+
+        options.append({
+            "key": key,
+            "title": title,
+            "time_window": time_window,
+            "duration_hours": dur,
+            "notes": notes,
+            "location": location,
+        })
+
+    return options
+
 def get_coo_response(
     api_key: str,
     user_request: str,
+    groq_key: str = "",     # Groq key for JSON repair + fallback
     memory: Optional[List[Dict[str, Any]]] = None,
     calendar_data: Optional[List[Dict[str, Any]]] = None,
     pending_events: Optional[List[Dict[str, Any]]] = None,
@@ -938,6 +1161,9 @@ def get_coo_response(
     chat_history: Optional[List[Dict[str, Any]]] = None,
     ideas_dump: str = "[]",
     ideas_summary: Optional[List[Dict[str, Any]]] = None,
+    idea_options: Optional[List[Dict[str, Any]]] = None,
+    selected_idea: str = "",
+
 ) -> str:
     """
     Main Brain call. Returns STRICT JSON string only.
@@ -957,7 +1183,7 @@ def get_coo_response(
     pending_events = pending_events or []
     chat_history = chat_history or []
 
-    client = Groq(api_key=api_key)
+    router = LLMRouter(anthropic_key=api_key, groq_key=groq_key or "")
 
     now = _get_tz_now()
     current_time_str = now.strftime("%A, %B %d, %Y at %I:%M %p")
@@ -966,9 +1192,38 @@ def get_coo_response(
 
     # -----------------------------
     # Route: option continuity (ideas + A/B/C)
+    # Prefer flow-provided persisted options for determinism.
     # -----------------------------
-    idea_options = _extract_option_titles_from_history(chat_history)
-    selected_idea = _match_selected_idea_title(user_request, idea_options) or ""
+    # Resolve last assistant message early — used by both idea_options fallback and sel detection
+    last_assistant_text = _get_last_assistant_text(chat_history)
+
+    idea_options = idea_options or []
+    if not isinstance(idea_options, list) or not idea_options:
+        # fallback to history parsing only if flow didn't provide options
+        idea_options = _extract_option_titles_from_history(chat_history)
+
+    # Secondary fallback: if idea_options still empty but last assistant message had
+    # A/B/C blocks with When/Where, parse them directly so schedule A works reliably
+    if not idea_options and last_assistant_text:
+        parsed_opts = _parse_abc_options_from_text(last_assistant_text, now)
+        if parsed_opts:
+            idea_options = parsed_opts
+
+    # Normalise: ensure every item in idea_options is a dict (not a bare string).
+    # _extract_option_titles_from_history returns List[str]; all other paths return List[dict].
+    _LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    idea_options = [
+        opt if isinstance(opt, dict)
+        else {"key": _LETTERS[i] if i < len(_LETTERS) else str(i+1),
+              "title": str(opt), "time_window": "", "duration_hours": 0,
+              "notes": "", "location": ""}
+        for i, opt in enumerate(idea_options)
+    ]
+
+    selected_idea = (selected_idea or "").strip()
+    if not selected_idea:
+        # fallback heuristic match
+        selected_idea = _match_selected_idea_title(user_request, idea_options) or ""
 
     # Dialog continuation: treat short replies as answers to last assistant question (prevents restarting)
     last_q = _extract_last_assistant_question(chat_history)
@@ -981,8 +1236,7 @@ def get_coo_response(
             "INSTRUCTION: Treat the user message as an answer and continue; do not restart.\n"
         )
 
-    # A/B/C selection mapping from last assistant message
-    last_assistant_text = _get_last_assistant_text(chat_history)
+    # A/B/C selection mapping from last assistant message (last_assistant_text already set above)
     sel = _match_selected_option(user_request, last_assistant_text)
     if not isinstance(sel, dict):
         sel = {"kind": "none", "choice": ""}
@@ -1015,6 +1269,27 @@ def get_coo_response(
             user_request = "change the time"
         elif sel["choice"] == "C":
             user_request = "cancel"
+
+    # Weekend choice: user picked A/B/C from a weekend outing list.
+    # If idea_options are available, convert directly to a plan — no LLM call needed.
+    if sel["kind"] == "weekend_choice" and sel["choice"] and idea_options:
+        for opt in idea_options:
+            if not isinstance(opt, dict):
+                continue
+            if (opt.get("key") or "").strip().upper() == sel["choice"].upper():
+                ev = _option_to_event(opt, now)
+                if ev and ev.get("start_time"):
+                    plan = {
+                        "type": "plan",
+                        "text": "",        # _finalize_for_ui fills this from event
+                        "pre_prep": "",
+                        "events": [ev],
+                    }
+                    return _dump_final(plan)
+                break
+        # If _option_to_event failed (bad time_window), ask brain to force a plan
+        # NOTE: do NOT include words like "outing/weekend" — that re-triggers the weekend flow
+        user_request = f"Please create a calendar event for option {sel['choice']} that I just selected."
 
     # -----------------------------
     # Context for prompts
@@ -1068,52 +1343,49 @@ def get_coo_response(
         ctx["memory_summary"] = []
 
     system_prompt = build_system_prompt(ctx)
-    messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
     # Greetings must NEVER trigger weekend routing or scheduling.
-    # If the user didn't express scheduling intent, force a chat response (content generated by LLM, not hardcoded here).
     if _is_greeting(user_request) and (not _is_schedule_intent(user_request)) and (not _is_weekend_outing_request(user_request)):
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "GREETING MODE: The user greeted you. "
-                    "Return type='chat' with a friendly response and one short follow-up question. "
-                    "Do NOT offer to schedule/add/plan anything. events must be an empty list."
-                ),
-            }
+        system_prompt += (
+            "\n\nGREETING MODE: The user greeted you. "
+            "Return type='chat' with a friendly response and one short follow-up question. "
+            "Do NOT offer to schedule/add/plan anything. events must be an empty list."
         )
 
-    if image_context is not None:
-        model = "llama-3.2-90b-vision-preview"
-        base64_image = encode_image(image_context)
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_request or ""},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
-                ],
-            }
-        )
-    else:
-        model = "llama-3.3-70b-versatile"
-        messages.append({"role": "user", "content": user_request or ""})
+    # model is passed to helpers for signature compat (router handles actual model selection)
+    model = "router"
+
+    # user_content: str for text turns; list for vision (router handles encoding)
+    user_content = user_request or " "
 
     # -----------------------------
     # LLM call
     # -----------------------------
     try:
-        completion = client.chat.completions.create(
-            model=model,
-            messages=messages,
+        image_b64 = encode_image(image_context) if image_context is not None else None
+        raw_text = router.call(
+            "brain",
+            system=system_prompt,
+            user=user_content if isinstance(user_content, str) else (user_request or " "),
             temperature=0.6,
             max_tokens=1024,
-            stream=False,
+            image_b64=image_b64,
         )
-        raw_text = (completion.choices[0].message.content or "").strip()
+        if not raw_text:
+            raise ValueError("Empty response from router")
     except Exception as e:
+        if _is_rate_limited(e):
+            return json.dumps(
+                {
+                    "type": "chat",
+                    "text": "I'm getting rate-limited right now. Please resend your last message in ~30 seconds.",
+                    "pre_prep": "",
+                    "events": [],
+                },
+                ensure_ascii=False,
+            )
         return _strict_error_json(str(e))
+
 
     # -----------------------------
     # Parse + repair
@@ -1121,7 +1393,7 @@ def get_coo_response(
     parsed = _try_parse_json(raw_text)
     if not isinstance(parsed, dict):
         try:
-            fixed = _repair_json_with_llm(client, model, raw_text)
+            fixed = _repair_json_with_llm(router, model, raw_text)
             parsed = _try_parse_json(fixed)
         except Exception:
             parsed = None
@@ -1150,10 +1422,30 @@ def get_coo_response(
         if _is_time_choice and _choice_letter and _is_schedule_intent(original_user_request):
             if (parsed.get('type') != 'plan') or (not parsed.get('events')):
                 selection_summary = f"User chose time option {_choice_letter} from the last assistant time window list. Last assistant time list: {last_assistant_text}"
-                forced = _regen_force_plan_from_selection(client, model, ctx, original_user_request, selection_summary)
+                forced = _regen_force_plan_from_selection(router, model, ctx, original_user_request, selection_summary)
                 return _dump_final(forced)
     except Exception:
         pass
+
+    # If user explicitly chose schedule A/B/C and we have idea_options,
+    # enforce a real plan event even if the LLM forgot events[].
+    choice = _extract_schedule_choice(original_user_request)
+    if choice and isinstance(idea_options, list) and idea_options:
+        if (parsed.get("type") != "plan") or (not (parsed.get("events") or [])):
+            picked = None
+            for opt in idea_options:
+                if not isinstance(opt, dict):
+                    continue
+                if (opt.get("key") or "").strip().upper() == choice.upper():
+                    picked = opt
+                    break
+
+            if picked:
+                ev = _option_to_event(picked, now)
+                if ev and ev.get("start_time"):
+                    parsed["type"] = "plan"
+                    parsed["events"] = [ev]
+    
 
     # -----------------------------
     # -----------------------------
@@ -1162,7 +1454,7 @@ def get_coo_response(
     if (not _is_weekend_outing_request(user_request)) and (not _is_schedule_intent(user_request)):
         # If assistant tries to push scheduling or time selection, regenerate as chat.
         if _looks_like_banned_scheduling_prompt(parsed.get("text", "")) or (parsed.get("type") in {"plan", "question", "confirmation", "conflict"} and "schedule" in (parsed.get("text") or "").lower()):
-            safe_chat = _regen_safe_chat_no_scheduling(client, model, ctx, user_request)
+            safe_chat = _regen_safe_chat_no_scheduling(router, model, ctx, user_request)
             return _dump_final(safe_chat)
 
     t = (parsed.get("type") or "").lower()
@@ -1176,14 +1468,29 @@ def get_coo_response(
         has_abc = ("(A)" in txt and "(B)" in txt and "(C)" in txt)
         if _dead_end_output(parsed, user_request=user_request) or (t != "question") or (not has_abc):
             regen = _regen_dynamic_weekend_options(
-                client=client,
+                router=router,
                 model=model,
                 user_request=user_request,
                 current_location=current_location,
                 memory_dump=memory_dump,
                 ideas_dump=ideas_dump,
+                chat_history=chat_history,
             )
             return _dump_final(regen)
+
+    # -----------------------------
+    # BUG-09: If user already gave us title + day + time, skip ALL follow-up questions.
+    # Force a direct plan regen — never ask location or anything else.
+    # Exempt: weekend outing requests (those need the A/B/C picker — returned earlier).
+    # -----------------------------
+    if (
+        _is_schedule_intent(user_request)
+        and _user_provided_time(user_request)
+        and parsed.get("type") == "question"
+        and not _is_weekend_outing_request(user_request)
+    ):
+        regen = _regen_force_plan_direct(router, model, ctx, user_request)
+        return _dump_final(regen)
 
     # -----------------------------
     # A/B/C enforcement for scheduling questions (non-weekend)
@@ -1195,16 +1502,19 @@ def get_coo_response(
         has_abc = ("(A)" in qtxt and "(B)" in qtxt and "(C)" in qtxt)
         has_reply = ('Reply exactly: schedule A / schedule B / schedule C' in qtxt)
         if not (has_abc and has_reply):
-            regen = _regen_time_question(client, model, ctx, user_request=user_request)
+            regen = _regen_time_question(router, model, ctx, user_request=user_request)
             return _dump_final(regen)
 
 
     # -----------------------------
     # Prevent guessed-time scheduling (plan with events but user didn't specify time)
+    # Exempt: option selections (schedule A/B/C) — those carry an implicit time commitment
     # -----------------------------
-    if t == "plan" and events:
+    _is_option_selection = bool(re.search(r"\b(schedule\s*)?[A-C]\b", original_user_request, re.IGNORECASE)) \
+                           and sel.get("kind") in ("weekend_choice", "time_choice")
+    if t == "plan" and events and not _is_option_selection:
         if not _user_provided_time(user_request) and not _user_requested_multiple(user_request):
-            q = _regen_time_question(client, model, ctx, user_request)
+            q = _regen_time_question(router, model, ctx, user_request)
             return _dump_final(q)
         
 

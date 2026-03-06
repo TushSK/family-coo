@@ -300,11 +300,19 @@ def upsert_calendar_missions(events: List[Dict[str, Any]]) -> None:
 
     missions = _read_json(MISSION_FILE)
     existing_source_ids = {m.get("source_id") for m in missions if m.get("source_id")}
+    # BUG-10 prevention: also track pending titles to avoid null-source_id duplicates
+    existing_pending_titles = {m.get("title") for m in missions if m.get("status") == "pending"}
 
     changed = False
     for ev in events:
         source_id = ev.get("id") or ev.get("source_id")
+        ev_title = ev.get("title") or ev.get("summary") or "Event"
         if not source_id or source_id in existing_source_ids:
+            continue
+        # Skip if a pending mission with the same title already exists (prevents duplication
+        # when log_mission_start created an entry before the Calendar sync ran)
+        if ev_title in existing_pending_titles:
+            existing_source_ids.add(source_id)
             continue
 
         end_raw = ev.get("end_raw") or ev.get("end_time")
@@ -402,15 +410,26 @@ def snooze_mission(mission_id, hours=4):
 
 
 def complete_mission_review(mission_id, was_completed, reason, user_id=None):
-    """Saves the feedback and closes the mission."""
+    """Saves the feedback and closes the mission.
+    BUG-10: Also sweeps duplicate pending missions with the same title so the
+    Action Required banner disappears after a single Yes/No click.
+    """
     missions = _read_json(MISSION_FILE)
     mission_title = "Unknown Mission"
 
+    # Pass 1: mark the exact mission by id
     for m in missions:
         if m.get("id") == mission_id:
             m["status"] = "reviewed"
             mission_title = m.get("title", mission_title)
             break
+
+    # Pass 2: sweep duplicates — any other pending mission with the same title
+    # (created by log_mission_start + upsert_calendar_missions duplication)
+    if mission_title and mission_title != "Unknown Mission":
+        for m in missions:
+            if m.get("id") != mission_id and m.get("status") == "pending" and m.get("title") == mission_title:
+                m["status"] = "reviewed"
 
     _write_json(MISSION_FILE, missions)
 

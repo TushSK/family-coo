@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 import streamlit as st
 from PIL import Image
+import json, re
 
 from dateutil import parser as dtparser
 
@@ -99,7 +100,8 @@ def init_state():
         "authenticated": False,
         "checkin_feedback_open": False,
         "checkin_feedback_text": "",
-        "show_camera": False
+        "show_camera": False,
+        "abc_pending_submit": False,
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -178,17 +180,10 @@ def _extract_json(raw):
         obj = json.loads(raw)
         return obj if isinstance(obj, dict) else None
     except Exception:
-        try:
-            m = re.search(r"(\{.*\})", raw, re.DOTALL)
-            if not m:
-                return None
-            obj = json.loads(m.group(1))
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            return None
+        return None
 
 def _extract_options_json(pre_prep: str):
-    import json, re
+    
     if not pre_prep or not isinstance(pre_prep, str):
         return None
     m = re.search(r"OPTIONS_JSON\s*=\s*(\[[\s\S]*\])", pre_prep)
@@ -201,10 +196,12 @@ def _extract_options_json(pre_prep: str):
         return None
 
 def _extract_schedule_choice(text: str) -> str:
+    """Updated to catch natural choices like 'A', 'Option B', or 'let's do C'."""
     import re
     t = (text or "").strip().lower()
-    m = re.fullmatch(r"(schedule|plan|add)\s+([abc])", t)
-    return m.group(2).upper() if m else ""
+    # Look for a standalone A, B, or C, optionally preceded by common selection words
+    m = re.search(r"\b(?:option\s+|schedule\s+|plan\s+|choose\s+|let\'s do\s+)?([a-c])\b", t)
+    return m.group(1).upper() if m else ""
 
 # -----------------------
 # 2. LOGIC
@@ -233,11 +230,13 @@ def execute_plan_logic(user_text: str, image_obj=None):
     # STRICT drafting gate: ONLY schedule/add/plan (whole words).
     # ------------------------------------------------------------
     def _should_create_draft(text: str) -> bool:
+        """Updated to catch scheduling intent AND natural option selections."""
+        import re
         t = (text or "").strip().lower()
         if not t:
             return False
 
-        # Never draft for questions
+        # Never draft for explicit questions
         if "?" in t:
             return False
 
@@ -249,14 +248,19 @@ def execute_plan_logic(user_text: str, image_obj=None):
         if any(t.startswith(p) for p in question_prefixes):
             return False
 
-        return bool(re.search(r"\b(schedule|add|plan)\b", t))
+        # Catch explicit scheduling words OR A/B/C option selections
+        has_intent = bool(re.search(r"\b(schedule|add|plan|book)\b", t))
+        has_choice = bool(re.search(r"\b(?:option\s+|schedule\s+|plan\s+|choose\s+|let\'s do\s+)?([a-c])\b", t))
+        
+        return has_intent or has_choice
 
     schedule_intent = _should_create_draft(user_text)
 
     try:
-        api_key = st.secrets["general"]["groq_api_key"]
+        api_key  = st.secrets["anthropic"]["api_key"]
+        groq_key = st.secrets["general"]["groq_api_key"]
     except Exception:
-        add_msg("assistant", "⛔ Error: Missing 'groq_api_key' in secrets.toml.")
+        add_msg("assistant", "⛔ Error: Missing API keys in secrets.toml. Check [anthropic] and [general] blocks.")
         return
 
     # -----------------------------
@@ -304,15 +308,20 @@ def execute_plan_logic(user_text: str, image_obj=None):
 
     # ---- call brain ----
     raw = get_coo_response(
-        api_key=api_key,
-        user_request=user_text,
-        memory=memory,
-        calendar_data=cal_str,
-        chat_history=st.session_state.chat_history,
-        image_obj=image_obj,
-        current_location=st.session_state.user_location,
-        ideas_summary=ideas_summary,
-        ideas_dump=ideas_dump,
+    api_key=api_key,
+    groq_key=groq_key,
+    user_request=user_text,
+    memory=memory,
+    calendar_data=cal_str,
+    chat_history=st.session_state.chat_history,
+    image_obj=image_obj,
+    current_location=st.session_state.user_location,
+    ideas_summary=ideas_summary,
+    ideas_dump=ideas_dump,
+
+    # ✅ 2.8A continuity wiring (deterministic)
+    idea_options=st.session_state.get("idea_options") or [],
+    selected_idea=st.session_state.get("selected_idea") or "",
     )
     print("BRAIN_RAW:", raw)
     data = _extract_json(raw)
@@ -363,6 +372,61 @@ def execute_plan_logic(user_text: str, image_obj=None):
 
     # ✅ Only draft when strict scheduling intent is detected
     new_events = data.get("events", [])
+
+    # Safety net: if user said "schedule A/B/C" but brain returned no events,
+    # try to build the event directly from persisted idea_options in session state.
+    if schedule_intent and not new_events:
+        choice = _extract_schedule_choice(user_text)
+        opts = st.session_state.get("idea_options") or []
+        if choice and opts:
+            for opt in opts:
+                if (opt.get("key") or "").strip().upper() == choice.upper():
+                    # Build event from the option's time_window directly
+                    try:
+                        import re as _re
+                        from dateutil import parser as _dtp
+                        from datetime import datetime as _dt, timedelta as _td
+                        tw = (opt.get("time_window") or "").replace("—", "–").replace("-", "–")
+                        if "–" in tw:
+                            left, right = [x.strip() for x in tw.split("–", 1)]
+                            parts = left.split()
+                            day_abbr = parts[0][:3].lower()
+                            start_txt = " ".join(parts[1:])
+                            end_txt = right
+                            # resolve date
+                            from datetime import date as _date
+                            today = _date.today()
+                            wd = today.weekday()
+                            days_to_sat = (5 - wd) % 7 or 7
+                            sat = today + _td(days=days_to_sat)
+                            base = sat if day_abbr == "sat" else sat + _td(days=1)
+                            s = _dtp.parse(start_txt)
+                            e = _dtp.parse(end_txt)
+                            start_dt = _dt(base.year, base.month, base.day, s.hour, s.minute)
+                            end_dt   = _dt(base.year, base.month, base.day, e.hour, e.minute)
+                            if end_dt <= start_dt:
+                                end_dt = start_dt + _td(hours=float(opt.get("duration_hours") or 2))
+                            new_events = [{
+                                "title":       opt.get("title", "Event"),
+                                "start_time":  start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                                "end_time":    end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                                "location":    opt.get("location") or opt.get("notes") or "",
+                                "description": opt.get("notes") or "",
+                            }]
+                            # Update assistant message to confirm the draft
+                            if st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "assistant":
+                                ev = new_events[0]
+                                st.session_state.chat_history[-1]["content"] = (
+                                    f"✅ **Draft ready**\n\n"
+                                    f"**{ev['title']}**\n\n"
+                                    f"📅 {start_dt.strftime('%A, %b %d')} • {s.strftime('%I:%M %p')} – {e.strftime('%I:%M %p')}\n\n"
+                                    f"📍 {ev['location']}\n\n"
+                                    f"*Review in Drafting and click Add.*"
+                                )
+                    except Exception:
+                        pass
+                    break
+
     if schedule_intent and new_events:
         st.session_state.pending_events = new_events
 

@@ -128,39 +128,35 @@ STABILITY / ROUTING RULES
 - If user did NOT use schedule/add/plan: DO NOT push scheduling or A/B/C scheduling prompts.
 - Greeting must never trigger scheduling logic.
 
-=========================================
-A/B/C OUTPUT FORMAT (DETERMINISTIC, STRICT)
-=========================================
-CRITICAL: You MUST use Markdown line breaks (double newlines) between options. 
-If the output looks like a paragraph, it is a FAILURE.
+# Replace the A/B/C template section in rules_block with:
+
+A/B/C OUTPUT FORMAT (PLAIN TEXT, STRICT)
+========================================
+CRITICAL: Use plain text only (NO markdown). Use blank lines between options.
 
 A/B/C TEMPLATE (COPY THIS SHAPE EXACTLY):
 
-**Weekend outing — pick one:**
+Weekend outing — pick one:
 
-**(A) <Title>**
-* **When:** <Day/Date> • <Start Time> – <End Time>
-* **Where:** <Place>
-* **Notes:** <1 short detail>
+(A) <Title>
+    When: <Day/Date> • <Start Time> – <End Time>
+    Where: <Place>
+    Notes: <1 short detail>
 
-**(B) <Title>**
-* **When:** <Day/Date> • <Start Time> – <End Time>
-* **Where:** <Place>
-* **Notes:** <1 short detail>
+(B) <Title>
+    When: <Day/Date> • <Start Time> – <End Time>
+    Where: <Place>
+    Notes: <1 short detail>
 
-**(C) Custom**
-Tell me: <day/date> + <start time> + <place>
+(C) Custom
+    Tell me: <day/date> + <start time> + <place>
 
-**Reply exactly: schedule A / schedule B / schedule C**
-
-{_FINAL_REPLY_LINE}
+Reply exactly: schedule A / schedule B / schedule C
 
 HARD RULES:
 - MUST include blank lines between A, B, and C blocks.
 - MUST NOT put (A)(B)(C) on the same line.
-- Keep A and B to max 3 short lines (When/Where/Notes).
-- Always include the final reply line EXACTLY once. No variants. No duplicates.
-- If you violate this format, the response is INVALID.
+- Include the final reply line EXACTLY once.
 
 =====================
 SMART DECISION POLICY
@@ -275,6 +271,8 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     memory_dump = str(ctx.get("memory_dump", "[]") or "[]")
     ideas_dump = str(ctx.get("ideas_dump", "[]") or "[]")
     constraints = ctx.get("constraints", {}) or {}
+    # Variety: titles of ideas already shown (to avoid repetition)
+    avoid_ideas = ctx.get("avoid_ideas") or []
 
     schema_question = _schema_question_example()
 
@@ -289,8 +287,13 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     lines.append(f"Memory bank: {memory_dump}")
     lines.append(f"Ideas Inbox (use when relevant): {ideas_dump}")
     lines.append(f"Constraints (MUST honor): {json.dumps(constraints, ensure_ascii=False)}")
+    if avoid_ideas:
+        avoid_str = ", ".join(f'"{t}"' for t in avoid_ideas[:6])
+        lines.append(f"AVOID REPEATING (already shown to user): {avoid_str}")
+        lines.append("You MUST generate DIFFERENT activity titles and locations from the ones above.")
     lines.append("")
-    lines.append(f'Task: Generate EXACTLY 3 family-friendly weekend outing options for: "{user_request}"')
+    lines.append(f'Task: Generate EXACTLY 3 FRESH family-friendly weekend outing options for: "{user_request}"')
+    lines.append("IMPORTANT: Rotate activity types (indoor/outdoor, active/relaxed, day/evening). Do NOT repeat previous suggestions.")
     lines.append("")
     lines.append("MANDATORY RULES:")
     lines.append('- type MUST be "question"')
@@ -304,16 +307,19 @@ def build_weekend_regen_prompt(ctx: Dict[str, Any]) -> str:
     lines.append("Weekend outing — pick one:")
     lines.append("")
     lines.append("(A) <Title>")
-    lines.append("    Duration: <N> hours")
-    lines.append("    Time window: <start time>–<end time>")
+    lines.append("    When: <Day/Date> • <Start Time> – <End Time>")
+    lines.append("    Where: <Place>")
+    lines.append("    Notes: <1 short detail>")
     lines.append("")
     lines.append("(B) <Title>")
-    lines.append("    Duration: <N> hours")
-    lines.append("    Time window: <start time>–<end time>")
+    lines.append("    When: <Day/Date> • <Start Time> – <End Time>")
+    lines.append("    Where: <Place>")
+    lines.append("    Notes: <1 short detail>")
     lines.append("")
     lines.append("(C) <Title>")
-    lines.append("    Duration: <N> hours")
-    lines.append("    Time window: <start time>–<end time>")
+    lines.append("    When: <Day/Date> • <Start Time> – <End Time>")
+    lines.append("    Where: <Place>")
+    lines.append("    Notes: <1 short detail>")
     lines.append("")
     lines.append(_FINAL_REPLY_LINE)
     lines.append("(Optional: add Sat/Sun + adjust time window)")

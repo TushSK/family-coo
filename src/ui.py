@@ -971,13 +971,61 @@ def render_command_center(
         if not history:
             st.info("No messages yet. Type something and click Execute.")
         else:
-            for msg in history[-12:]:
+            # Find index of the LAST assistant message with A/B/C options
+            # (so we only render choice buttons once, on the most recent prompt)
+            _abc_msg_idx = -1
+            for _i, _m in enumerate(history[-12:]):
+                _c = (_m.get("content") or "")
+                if (_m.get("role") == "assistant"
+                        and "(A)" in _c and "(B)" in _c and "(C)" in _c
+                        and "schedule A" in _c.lower()):
+                    _abc_msg_idx = _i
+
+            for _idx, msg in enumerate(history[-12:]):
                 role = (msg.get("role") or "assistant").strip().lower()
                 content = msg.get("content") or ""
                 if role not in ("user", "assistant"):
                     role = "assistant"
                 with st.chat_message(role):
-                    st.write(content)
+                    # Strip the "Reply exactly: …" line — replaced by buttons below
+                    import re as _re
+                    display_content = _re.sub(
+                        r"\n?Reply exactly:.*?schedule C[^\n]*", "", content,
+                        flags=_re.IGNORECASE
+                    ).rstrip()
+                    display = display_content.replace("\n", "  \n")
+                    st.markdown(display)
+
+                    # Render choice buttons only on the LAST A/B/C assistant message
+                    if role == "assistant" and _idx == _abc_msg_idx:
+                        st.markdown(
+                            "<div style='margin-top:10px; font-size:13px; font-weight:700;"
+                            " color:#64748b;'>Choose an option:</div>",
+                            unsafe_allow_html=True,
+                        )
+                        _b1, _b2, _b3 = st.columns(3, gap="small")
+                        with _b1:
+                            if st.button("✅ Schedule A", key=f"abc_choice_A_{_idx}", use_container_width=True):
+                                st.session_state["plan_text"] = "schedule A"
+                                st.session_state["abc_pending_submit"] = True
+                                st.rerun()
+                        with _b2:
+                            if st.button("✅ Schedule B", key=f"abc_choice_B_{_idx}", use_container_width=True):
+                                st.session_state["plan_text"] = "schedule B"
+                                st.session_state["abc_pending_submit"] = True
+                                st.rerun()
+                        with _b3:
+                            if st.button("✅ Schedule C", key=f"abc_choice_C_{_idx}", use_container_width=True):
+                                st.session_state["plan_text"] = "schedule C"
+                                st.session_state["abc_pending_submit"] = True
+                                st.rerun()
+
+            # Handle deferred ABC submit (must be outside the loop to avoid double-widget keys)
+            if st.session_state.get("abc_pending_submit"):
+                st.session_state["abc_pending_submit"] = False
+                if callable(submit_callback):
+                    submit_callback()
+                st.rerun()
 
         # ===== Train the Brain =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
