@@ -188,7 +188,7 @@
         "source_id": null,
         "title": "Doctor Meeting",
         "end_time": "2026-03-09T18:30:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -196,7 +196,7 @@
         "source_id": null,
         "title": "Ybor City Sunday Market",
         "end_time": "2026-03-08T13:00:00+00:00",
-        "status": "pending",
+        "status": "reviewed",
         "snoozed_until": null
     },
     {
@@ -204,7 +204,47 @@
         "source_id": null,
         "title": "Lab Work \u2013 Daughter at Quest Diagnostics",
         "end_time": "2026-03-07T09:00:00+00:00",
+        "status": "reviewed",
+        "snoozed_until": null
+    },
+    {
+        "id": "67ff9059",
+        "source_id": null,
+        "title": "Family Play Time",
+        "end_time": "2026-03-06T20:30:00+00:00",
+        "status": "reviewed",
+        "snoozed_until": null
+    },
+    {
+        "id": "8b0c4e89",
+        "source_id": "rbv76aj3qc5qf798icdq0f2hto",
+        "title": "Family Play Time",
+        "end_time": "2026-03-07T01:30:00+00:00",
         "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "dba06c60",
+        "source_id": "3jvdej147h0l9u0si6dal5ijs0",
+        "title": "Lab Work \u2013 Daughter at Quest Diagnostics",
+        "end_time": "2026-03-07T14:00:00+00:00",
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "2644f51a",
+        "source_id": "pd3ql8fjdpd5a0378s1sf6c5s0",
+        "title": "Ybor City Sunday Market",
+        "end_time": "2026-03-08T17:00:00+00:00",
+        "status": "pending",
+        "snoozed_until": null
+    },
+    {
+        "id": "2c4b32ca",
+        "source_id": "khrsm60gv3q13eqgnhln07ca0o",
+        "title": "Doctor Meeting",
+        "end_time": "2026-03-09T22:30:00+00:00",
+        "status": "reviewed",
         "snoozed_until": null
     }
 ]

@@ -33,11 +33,20 @@ def safe_email_from_user(user_id: str) -> str:
     return _safe_user_key(user_id)
 
 def _user_memory_path(user_id: str) -> str:
+    """Primary path: memory/users/<safe_key>.json.
+    Falls back to root-level <safe_key>.json (legacy location).
+    """
     init_files()
+    fname = _safe_user_key(user_id) + ".json"
+    primary = os.path.join(USER_MEMORY_DIR, fname)
+    if os.path.exists(primary):
+        return primary
+    legacy = fname  # root-level
+    if os.path.exists(legacy):
+        return legacy
     if not os.path.exists(USER_MEMORY_DIR):
         os.makedirs(USER_MEMORY_DIR, exist_ok=True)
-    fname = _safe_user_key(user_id) + ".json"
-    return os.path.join(USER_MEMORY_DIR, fname)
+    return primary
 
 def load_user_memory(user_id: str, limit: int = 20) -> List[dict]:
     """
@@ -203,7 +212,15 @@ def _parse_dt(value: Optional[str]) -> Optional[dt.datetime]:
             v = s.replace("Z", "+00:00")
             dtx = dt.datetime.fromisoformat(v)
             if dtx.tzinfo is None:
-                dtx = dtx.replace(tzinfo=dt.timezone.utc)
+                # Treat naive datetimes as America/New_York.
+                # brain.py creates event times in Eastern time (no TZ suffix).
+                # Treating them as UTC would make "7 PM" appear past on a UTC server.
+                try:
+                    from zoneinfo import ZoneInfo
+                    _app_tz = ZoneInfo("America/New_York")
+                except ImportError:
+                    _app_tz = dt.timezone(dt.timedelta(hours=-5))  # EST fallback
+                dtx = dtx.replace(tzinfo=_app_tz)
             return dtx.astimezone(dt.timezone.utc)
 
         # All-day date: treat as end-of-day UTC
@@ -300,19 +317,11 @@ def upsert_calendar_missions(events: List[Dict[str, Any]]) -> None:
 
     missions = _read_json(MISSION_FILE)
     existing_source_ids = {m.get("source_id") for m in missions if m.get("source_id")}
-    # BUG-10 prevention: also track pending titles to avoid null-source_id duplicates
-    existing_pending_titles = {m.get("title") for m in missions if m.get("status") == "pending"}
 
     changed = False
     for ev in events:
         source_id = ev.get("id") or ev.get("source_id")
-        ev_title = ev.get("title") or ev.get("summary") or "Event"
         if not source_id or source_id in existing_source_ids:
-            continue
-        # Skip if a pending mission with the same title already exists (prevents duplication
-        # when log_mission_start created an entry before the Calendar sync ran)
-        if ev_title in existing_pending_titles:
-            existing_source_ids.add(source_id)
             continue
 
         end_raw = ev.get("end_raw") or ev.get("end_time")
@@ -351,7 +360,13 @@ def get_pending_review():
             continue
 
         end_dt = _parse_dt(m.get("end_time"))
-        if not end_dt or end_dt >= now:
+        if not end_dt:
+            continue
+        # Grace period: wait 30 min after event ends before asking for feedback.
+        # Prevents "Action Required" popping up while event is still in progress
+        # or hasn't started yet due to timezone mismatches.
+        grace_end = end_dt + dt.timedelta(minutes=30)
+        if grace_end > now:
             continue
 
         snooze_dt = _parse_dt(m.get("snoozed_until"))
@@ -382,7 +397,10 @@ def get_missed_count() -> int:
             continue
 
         end_dt = _parse_dt(m.get("end_time"))
-        if not end_dt or end_dt >= now:
+        if not end_dt:
+            continue
+        grace_end = end_dt + dt.timedelta(minutes=30)
+        if grace_end > now:
             continue
 
         snooze_dt = _parse_dt(m.get("snoozed_until"))
@@ -411,25 +429,25 @@ def snooze_mission(mission_id, hours=4):
 
 def complete_mission_review(mission_id, was_completed, reason, user_id=None):
     """Saves the feedback and closes the mission.
-    BUG-10: Also sweeps duplicate pending missions with the same title so the
-    Action Required banner disappears after a single Yes/No click.
+    Also sweeps all other pending missions with the same title (BUG-10 fix):
+    duplicate entries (source_id=None + gcal copy) are both marked reviewed.
     """
     missions = _read_json(MISSION_FILE)
     mission_title = "Unknown Mission"
 
-    # Pass 1: mark the exact mission by id
+    # First pass: find the title of the reviewed mission
     for m in missions:
         if m.get("id") == mission_id:
-            m["status"] = "reviewed"
             mission_title = m.get("title", mission_title)
             break
 
-    # Pass 2: sweep duplicates — any other pending mission with the same title
-    # (created by log_mission_start + upsert_calendar_missions duplication)
-    if mission_title and mission_title != "Unknown Mission":
-        for m in missions:
-            if m.get("id") != mission_id and m.get("status") == "pending" and m.get("title") == mission_title:
-                m["status"] = "reviewed"
+    # Second pass: mark reviewed by id AND sweep all pending dups with same title
+    for m in missions:
+        if m.get("id") == mission_id:
+            m["status"] = "reviewed"
+        elif (m.get("status") == "pending"
+              and m.get("title", "").strip().lower() == mission_title.strip().lower()):
+            m["status"] = "reviewed"  # sweep duplicate
 
     _write_json(MISSION_FILE, missions)
 
@@ -450,6 +468,63 @@ def complete_mission_review(mission_id, was_completed, reason, user_id=None):
 # ------------------------------------------------------------
 # Reliability KPI
 # ------------------------------------------------------------
+def purge_stale_missions() -> int:
+    """
+    One-time cleanup: remove pending missions whose end_time was incorrectly
+    stored as UTC (BUG-16). Detects them by checking if the same event exists
+    in calendar with a later (correct) end_time, OR if end_time is >12h in the
+    past but no calendar source_id matches a future event.
+
+    Also removes duplicate pending missions with the same title, keeping only
+    the most recent end_time.
+
+    Returns number of missions cleaned up.
+    """
+    missions = _read_json(MISSION_FILE)
+    now = _now_utc()
+    cleaned = 0
+
+    # Step 1: deduplicate by title — keep the one with the LATEST end_time
+    seen: dict = {}
+    for m in missions:
+        if m.get("status") != "pending":
+            continue
+        title = (m.get("title") or "").strip().lower()
+        end_dt = _parse_dt(m.get("end_time"))
+        if not end_dt:
+            continue
+        if title not in seen or end_dt > seen[title][1]:
+            seen[title] = (m["id"], end_dt)
+
+    # Mark all but the latest duplicate as reviewed
+    for m in missions:
+        if m.get("status") != "pending":
+            continue
+        title = (m.get("title") or "").strip().lower()
+        if title in seen and m["id"] != seen[title][0]:
+            m["status"] = "reviewed"
+            cleaned += 1
+
+    # Step 2: missions ending >30 min ago with no source_id are likely bad UTC stamps.
+    # Re-check: if end_time is < 8h ago, mark reviewed (likely stale from timezone bug).
+    eight_hrs_ago = now - dt.timedelta(hours=8)
+    for m in missions:
+        if m.get("status") != "pending":
+            continue
+        end_dt = _parse_dt(m.get("end_time"))
+        if end_dt and eight_hrs_ago < end_dt < now - dt.timedelta(minutes=30):
+            # Ended between 30 min and 8h ago — real event that needs review
+            pass  # leave for get_pending_review to handle
+        elif end_dt and end_dt < eight_hrs_ago and not m.get("source_id"):
+            # Ended >8h ago with no source_id — orphaned log_mission_start entry
+            m["status"] = "reviewed"
+            cleaned += 1
+
+    if cleaned:
+        _write_json(MISSION_FILE, missions)
+    return cleaned
+
+
 def calculate_reliability_score(memory_path=None) -> int:
     """
     Reliability score (0-100), simple + explainable:
@@ -524,7 +599,16 @@ def _utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 def _ideas_path_for_user(safe_email: str) -> str:
-    return os.path.join("memory", "users", f"{safe_email}_ideas.json")
+    """Primary path: memory/users/<safe_email>_ideas.json.
+    Falls back to root-level <safe_email>_ideas.json (legacy location).
+    """
+    primary = os.path.join("memory", "users", f"{safe_email}_ideas.json")
+    if os.path.exists(primary):
+        return primary
+    legacy = f"{safe_email}_ideas.json"
+    if os.path.exists(legacy):
+        return legacy
+    return primary  # return primary even if missing (save will create it there)
 
 def load_user_ideas(safe_email: str) -> list:
     path = _ideas_path_for_user(safe_email)

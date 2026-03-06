@@ -29,6 +29,7 @@ from src.utils import (
     load_memory,
     log_mission_start,
     upsert_calendar_missions,
+    purge_stale_missions,
     load_feedback_rows,
     get_missed_count,
     save_manual_feedback,
@@ -102,6 +103,7 @@ def init_state():
         "checkin_feedback_text": "",
         "show_camera": False,
         "_abc_choice_pending": "",
+        "clear_conversation": False,
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -133,13 +135,6 @@ def run_proactive_checks(trigger: str = "app_load"):
         return  # already ran today
 
     # ---- Trigger 1: pending mission review ----
-    pending = get_pending_review()
-    if pending:
-        title = pending.get("title") or "a task"
-        add_msg("assistant", f"🔔 Action required: Did you complete “{title}”? Use **Yes/No** above.")
-        st.session_state.last_proactive_date = today
-        st.session_state.last_proactive_kind = "mission_checkin"
-        return
 
     # ---- Trigger 2: daily suggestion (based on memory + day) ----
     # Lightweight read of user memory (safe if function exists; otherwise skip)
@@ -301,28 +296,23 @@ def execute_plan_logic(user_text: str, image_obj=None):
 
     choice = _extract_schedule_choice(user_text)
     if choice and st.session_state.get("idea_options"):
-        # carry selection into brain context so it can turn it into a schedulable plan/question
         st.session_state["selected_idea"] = choice
     else:
         st.session_state["selected_idea"] = ""
 
-    # ---- load missions + feedback for smart brain context ----
+    # ---- load missions + feedback for brain context ----
     missions_dump = "[]"
     feedback_dump = "[]"
     try:
-        from src.utils import MISSION_FILE, MEMORY_FILE
-        import json as _json2
-        def _read_json_safe(path):
-            try:
-                with open(path, encoding="utf-8") as _f:
-                    return _json2.load(_f)
-            except Exception:
-                return []
-        _missions_all = _read_json_safe(MISSION_FILE)
-        _missions_recent = [m for m in _missions_all if m.get("status") == "reviewed"][-15:]
-        missions_dump = _json2.dumps(_missions_recent, ensure_ascii=False)
-        _feedback_all = _read_json_safe(MEMORY_FILE)
-        feedback_dump = _json2.dumps(_feedback_all[-20:], ensure_ascii=False)
+        from src.utils import _read_json, MISSION_FILE, MEMORY_FILE
+        _missions = _read_json(MISSION_FILE) or []
+        _feedback = _read_json(MEMORY_FILE) or []
+        missions_dump = json.dumps(
+            [{"title": m.get("title",""), "status": m.get("status","")}
+             for m in _missions[-20:]], ensure_ascii=False)
+        feedback_dump = json.dumps(
+            [{"mission": f.get("mission",""), "rating": f.get("rating","")}
+             for f in _feedback[-20:]], ensure_ascii=False)
     except Exception:
         pass
 
@@ -338,8 +328,6 @@ def execute_plan_logic(user_text: str, image_obj=None):
     current_location=st.session_state.user_location,
     ideas_summary=ideas_summary,
     ideas_dump=ideas_dump,
-    missions_dump=missions_dump,
-    feedback_dump=feedback_dump,
 
     # ✅ 2.8A continuity wiring (deterministic)
     idea_options=st.session_state.get("idea_options") or [],
@@ -464,24 +452,18 @@ def apply_deferred_ui_resets():
     """
     import streamlit as st
 
-    # BUG-12: ABC buttons cannot write to plan_text (widget key) after widget
-    # is created. Buttons write to _abc_choice_pending instead; we copy here
-    # BEFORE any widget is instantiated.
-    _pending_choice = st.session_state.get("_abc_choice_pending", "")
-    if _pending_choice:
-        st.session_state["plan_text"] = _pending_choice
-        st.session_state["_abc_choice_pending"] = ""
-        execute_plan_logic(_pending_choice)
-        st.session_state["clear_plan_text"] = True
-        return
-
     if st.session_state.get("defer_train_brain_reset"):
         # These keys are used by widgets; safe ONLY before widgets are created.
         st.session_state["brain_correction"] = ""
         st.session_state["brain_bad_response"] = False
-
-        # Clear the deferred flag
         st.session_state["defer_train_brain_reset"] = False
+
+    # ABC staging key: copy pending choice to execute_plan_logic, then clear
+    _pending_choice = st.session_state.get("_abc_choice_pending", "")
+    if _pending_choice:
+        st.session_state["_abc_choice_pending"] = ""
+        st.session_state["plan_text"] = _pending_choice
+        execute_plan_logic(_pending_choice)
 
 import re
 
@@ -618,6 +600,7 @@ def refresh_calendar(force_email=None):
             full = get_events_range(uid, now, now + timedelta(days=7))
             st.session_state.calendar_events_all = full
             upsert_calendar_missions(full)
+            purge_stale_missions()   # clean up bad-UTC-stamped pending entries
         except:
             st.session_state.calendar_events_all = upcoming
     else:
@@ -632,7 +615,9 @@ def add_to_calendar(ev):
 
     ok, msg, eid = add_event_to_calendar(uid, ev)
     if ok:
-        log_mission_start(ev)
+        # Pass eid as source_id so upsert_calendar_missions deduplicates correctly.
+        # Without this, refresh_calendar() adds a second mission entry for the same event.
+        log_mission_start({**ev, "source_id": eid} if eid else ev)
         st.session_state.pending_events = [x for x in st.session_state.pending_events if x != ev]
         refresh_calendar()
         add_msg("assistant", f"✅ Added '{ev.get('title')}' to calendar.")

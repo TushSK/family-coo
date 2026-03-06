@@ -493,20 +493,21 @@ def render_sidebar(status, count, on_start, on_clear, on_complete):
 
     # ensure current page state
     if "active_page" not in st.session_state:
-        st.session_state.active_page = "dashboard"  # dashboard | calendar | memory | settings
+        st.session_state.active_page = "coo"  # coo (default) | dashboard | calendar | memory | settings
 
     with st.sidebar:
-        # Brand
+        # Brand — clickable, returns to main COO view
+        if st.button(
+            "🏡  Family COO",
+            key="coo_brand_home",
+            use_container_width=True,
+            help="Go to main page",
+        ):
+            st.session_state.active_page = "coo"
+            st.rerun()
         st.markdown(
-            """
-            <div class="coo-brand">
-                <div class="coo-brand-icon">🏡</div>
-                <div>
-                    <div class="coo-brand-title">Family COO</div>
-                    <div class="coo-brand-sub">AI Operations Center</div>
-                </div>
-            </div>
-            """,
+            "<div style='text-align:center; font-size:11px; color:var(--text-muted);"
+            " margin:-10px 0 8px 0;'>AI Operations Center</div>",
             unsafe_allow_html=True,
         )
 
@@ -567,29 +568,32 @@ def render_sidebar(status, count, on_start, on_clear, on_complete):
                 st.session_state.active_page = page_name
                 st.rerun()
 
-        # Streamlit doesn’t let us assign class directly to button,
-        # so we style ALL sidebar buttons in CSS using container grouping.
-        # The “active” highlighting is handled in ui.py render blocks.
+        # Active-tab nav: indigo left border strip on selected tab
+        _cur = st.session_state.get("active_page", "coo")
 
-        # Buttons
-        if st.button("📊  Dashboard", use_container_width=True):
-            st.session_state.active_page = "dashboard"
-            st.rerun()
+        def _nav_btn(label, page, key):
+            is_active = _cur == page
+            st.markdown(
+                f"<div style='border-left:3px solid "
+                f"{'#4f46e5' if is_active else 'transparent'};"
+                f"background:{'#eef2ff' if is_active else 'transparent'};"
+                f"border-radius:0 10px 10px 0;margin-bottom:2px;padding-left:2px;'>",
+                unsafe_allow_html=True,
+            )
+            if st.button(label, key=key, use_container_width=True):
+                st.session_state.active_page = page
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        if st.button("🗓️  Calendar View", use_container_width=True):
-            st.session_state.active_page = "calendar"
-            st.rerun()
-
-        if st.button("🧠  Memory Bank", use_container_width=True):
-            st.session_state.active_page = "memory"
-            st.rerun()
+        _nav_btn("📊  Dashboard",     "dashboard", "nav_dashboard")
+        _nav_btn("🗓️  Calendar View", "calendar",  "nav_calendar")
+        _nav_btn("🧠  Memory Bank",   "memory",    "nav_memory")
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="coo-sidebar-label">SYSTEM</div>', unsafe_allow_html=True)
 
-        if st.button("⚙️  Settings", use_container_width=True):
-            st.session_state.active_page = "settings"
-            st.rerun()
+        _nav_btn("⚙️  Settings",      "settings",  "nav_settings")
+
 
         st.markdown("---")
 
@@ -816,9 +820,7 @@ def render_checkin_smart_strip():
             )
 
 
-# ------------------------------------------------------------
-# COMMAND CENTER (left column)
-# ------------------------------------------------------------
+
 def render_command_center(
     history,
     submit_callback,
@@ -947,12 +949,11 @@ def render_command_center(
                     toggle_camera_callback()
                 st.rerun()
 
-        # ===== Camera widget (shown when Scan toggled on) =====
+        # Camera widget — shown when Scan toggled on
         if st.session_state.get("show_camera"):
             st.markdown(
-                "<div style='margin-top:10px; margin-bottom:4px;"
-                " font-size:12px; font-weight:700; color:var(--text-muted);'>"
-                "📷 Point camera at text and capture:</div>",
+                "<div style='margin-top:8px; font-size:12px; font-weight:700;"
+                " color:var(--text-muted);'>📷 Point camera at text and capture:</div>",
                 unsafe_allow_html=True,
             )
             cam_img = st.camera_input(
@@ -987,15 +988,48 @@ def render_command_center(
         if not history:
             st.info("No messages yet. Type something and click Execute.")
         else:
-            for msg in history[-12:]:
+            import re as _re_abc
+            _last_abc_idx = -1
+            for _i, _m in enumerate(history[-12:]):
+                _c = (_m.get("content") or "")
+                if (_m.get("role") == "assistant"
+                        and "(A)" in _c and "(B)" in _c and "(C)" in _c
+                        and "schedule a" in _c.lower()):
+                    _last_abc_idx = _i
+
+            for _idx, msg in enumerate(history[-12:]):
                 role = (msg.get("role") or "assistant").strip().lower()
                 content = msg.get("content") or ""
                 if role not in ("user", "assistant"):
                     role = "assistant"
                 with st.chat_message(role):
-                    # Convert single \n to markdown line breaks so A/B/C options render correctly
-                    display = content.replace("\n", "  \n")
+                    display = _re_abc.sub(
+                        r"\n?Reply exactly:.*?schedule C[^\n]*", "",
+                        content, flags=_re_abc.IGNORECASE
+                    ).rstrip()
+                    display = display.replace("\n", "  \n")
                     st.markdown(display)
+
+                if role == "assistant" and _idx == _last_abc_idx:
+                    st.markdown(
+                        "<div style='font-size:12px; font-weight:700;"
+                        " color:var(--text-muted); margin:6px 0 4px 0;'>"
+                        "Choose an option:</div>",
+                        unsafe_allow_html=True,
+                    )
+                    _ba, _bb, _bc = st.columns(3, gap="small")
+                    with _ba:
+                        if st.button("✅ Option A", key="coo_abc_a", use_container_width=True):
+                            st.session_state["_abc_choice_pending"] = "schedule A"
+                            st.rerun()
+                    with _bb:
+                        if st.button("✅ Option B", key="coo_abc_b", use_container_width=True):
+                            st.session_state["_abc_choice_pending"] = "schedule B"
+                            st.rerun()
+                    with _bc:
+                        if st.button("✅ Option C", key="coo_abc_c", use_container_width=True):
+                            st.session_state["_abc_choice_pending"] = "schedule C"
+                            st.rerun()
 
         # ===== Train the Brain =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
