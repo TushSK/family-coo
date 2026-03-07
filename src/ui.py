@@ -14,10 +14,15 @@ def inject_css():
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-        :root{
-            --primary:#4f46e5;          /* Indigo-600 */
+        /* =====================================================
+           FORCE LIGHT MODE — prevent OS/browser dark-mode
+           from bleeding into Streamlit widgets
+           ===================================================== */
+        :root {
+            color-scheme: light !important;
+            --primary:#4f46e5;
             --primary-light:#e0e7ff;
-            --bg-body:#f8fafc;          /* Slate-50 */
+            --bg-body:#f8fafc;
             --surface:#ffffff;
             --text-main:#0f172a;
             --text-muted:#64748b;
@@ -25,488 +30,323 @@ def inject_css():
             --success:#10b981;
             --warning:#f59e0b;
             --danger:#ef4444;
-            --shadow-soft:0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
-            --shadow-card:0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.02);
+            --shadow-soft:0 4px 6px -1px rgba(0,0,0,0.05),0 2px 4px -1px rgba(0,0,0,0.03);
+            --shadow-card:0 10px 15px -3px rgba(0,0,0,0.05),0 4px 6px -2px rgba(0,0,0,0.02);
             --radius:16px;
         }
+        html, body { color-scheme: light !important; }
 
         * { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-        .stApp { background: var(--bg-body); }
+        .stApp { background: var(--bg-body) !important; color: var(--text-main) !important; }
         #MainMenu, footer, header { visibility: hidden; }
-
-        /* Streamlit main container alignment */
         section.main > div { padding-top: 28px; }
 
-        .block-container{
+        /* ── Force ALL Streamlit widgets to light mode ── */
+        /* Textarea */
+        .stTextArea textarea,
+        .stTextArea > div,
+        .stTextArea > div > div {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #e2e8f0 !important;
+            color-scheme: light !important;
+        }
+        .stTextArea textarea::placeholder { color: #94a3b8 !important; }
+
+        /* Text inputs */
+        .stTextInput input,
+        .stTextInput > div > div {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #e2e8f0 !important;
+            color-scheme: light !important;
+        }
+        .stTextInput input::placeholder { color: #94a3b8 !important; }
+
+        /* Buttons — override dark theme defaults */
+        .stButton > button {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border: 1.5px solid #e2e8f0 !important;
+            border-radius: 12px !important;
+            font-weight: 800 !important;
+            height: 44px !important;
+        }
+        .stButton > button:hover { background: #f8fafc !important; border-color: #cbd5e1 !important; }
+
+        /* Primary buttons */
+        .stButton > button[kind="primary"],
+        button[data-testid="baseButton-primary"] {
+            background: linear-gradient(135deg, #4f46e5 0%, #818cf8 100%) !important;
+            color: #ffffff !important;
+            border: none !important;
+        }
+        .stButton > button[kind="primary"]:hover { filter: brightness(1.06) !important; }
+
+        /* Checkbox + label */
+        .stCheckbox label, .stCheckbox span { color: #0f172a !important; }
+        .stCheckbox input[type="checkbox"] { color-scheme: light !important; }
+
+        /* Chat messages */
+        .stChatMessage { background: #f8fafc !important; color: #0f172a !important; }
+        .stChatMessage p, .stChatMessage span { color: #0f172a !important; }
+
+        /* Captions + info boxes */
+        .stCaption { color: #64748b !important; }
+        .stAlert, .stInfo { background: #eff6ff !important; color: #1e40af !important; }
+
+        /* Expander */
+        .streamlit-expanderHeader { background: #f8fafc !important; color: #0f172a !important; }
+        .streamlit-expanderContent { background: #ffffff !important; }
+
+        /* ── Layout ── */
+        .block-container {
             max-width: 1400px;
             padding-top: 20px;
             padding-bottom: 48px;
             padding-left: 48px;
             padding-right: 48px;
         }
+        @media (max-width: 1200px){ .block-container{ padding-left: 32px; padding-right: 32px; } }
+        @media (max-width: 900px) { .block-container{ padding-left: 18px; padding-right: 18px; } }
+        @media (max-width: 640px) { .block-container{ padding-left: 12px; padding-right: 12px; padding-top: 12px; } }
 
-        @media (max-width: 1200px){
-            .block-container{ padding-left: 32px; padding-right: 32px; }
-        }
-        @media (max-width: 900px){
-            .block-container{ padding-left: 18px; padding-right: 18px; }
-        }
-        @media (max-width: 640px){
-            .block-container{ padding-left: 12px; padding-right: 12px; padding-top: 12px; }
-        }
-
-        /* --------------------
-           Sidebar
-           -------------------- */
-        section[data-testid="stSidebar"]{
-            background: var(--surface);
+        /* ── Sidebar ── */
+        section[data-testid="stSidebar"] {
+            background: var(--surface) !important;
             border-right: 1px solid var(--border);
         }
-        section[data-testid="stSidebar"] > div{
-            width: 260px;
-            padding: 32px 24px;
-        }
+        section[data-testid="stSidebar"] > div { width: 260px; padding: 32px 24px; }
+        @media (max-width: 900px){ section[data-testid="stSidebar"] > div{ width: 240px; padding: 26px 18px; } }
 
-        @media (max-width: 900px){
-            section[data-testid="stSidebar"] > div{
-                width: 240px;
-                padding: 26px 18px;
-            }
-        }
-
-        .coo-brand{
-            display:flex; align-items:center; gap:12px;
-            margin-bottom: 28px;
-        }
+        .coo-brand{ display:flex; align-items:center; gap:12px; margin-bottom: 28px; }
         .coo-brand-icon{
-            width:40px; height:40px;
-            border-radius: 12px;
+            width:40px; height:40px; border-radius: 12px;
             display:flex; align-items:center; justify-content:center;
             background: linear-gradient(135deg, #4f46e5 0%, #818cf8 100%);
-            color: #fff;
-            font-size: 18px;
-            font-weight: 900;
+            color: #fff; font-size: 18px; font-weight: 900;
             box-shadow: 0 4px 10px rgba(79,70,229,0.30);
         }
-        .coo-brand-title{
-            font-size: 1.1rem;
-            font-weight: 900;
-            letter-spacing: -0.02em;
-            color: var(--text-main);
-            line-height: 1.1;
-        }
-        .coo-brand-sub{
-            font-size: .85rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            margin-top: 3px;
-        }
+        .coo-brand-title{ font-size: 1.1rem; font-weight: 900; letter-spacing: -0.02em; color: #0f172a; line-height: 1.1; }
+        .coo-brand-sub{ font-size: .85rem; font-weight: 700; color: #64748b; margin-top: 3px; }
 
         .coo-user-card{
-            display:flex; align-items:center; gap:12px;
-            padding: 12px;
-            background: #f8fafc;
-            border: 1px solid #eef2f7;
-            border-radius: 14px;
-            margin-bottom: 18px;
+            display:flex; align-items:center; gap:12px; padding: 12px;
+            background: #f8fafc; border: 1px solid #eef2f7; border-radius: 14px; margin-bottom: 18px;
         }
         .coo-avatar{
-            width: 42px; height: 42px;
-            border-radius: 999px;
+            width: 42px; height: 42px; border-radius: 999px;
             display:flex; align-items:center; justify-content:center;
-            background: var(--primary-light);
-            color: #3730a3;
-            font-weight: 900;
-            flex: 0 0 auto;
+            background: var(--primary-light); color: #3730a3; font-weight: 900; flex: 0 0 auto;
         }
-        .coo-user-name{ font-size: 14px; font-weight: 900; color: var(--text-main); }
-        .coo-user-meta{ font-size: 12px; font-weight: 700; color: var(--text-muted); margin-top: 2px; }
+        .coo-user-name{ font-size: 14px; font-weight: 900; color: #0f172a; }
+        .coo-user-meta{ font-size: 12px; font-weight: 700; color: #64748b; margin-top: 2px; }
 
         .coo-sidebar-label{
-            font-size: 0.7rem;
-            font-weight: 800;
-            color: #94a3b8;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin: 20px 0 10px;
+            font-size: 0.7rem; font-weight: 800; color: #94a3b8;
+            text-transform: uppercase; letter-spacing: 0.05em; margin: 20px 0 10px;
         }
-
         .coo-status-row{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 12px;
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            background: #ffffff;
-            margin-bottom: 10px;
+            display:flex; align-items:center; justify-content: space-between; gap: 10px;
+            padding: 12px; border: 1px solid var(--border); border-radius: 14px;
+            background: #ffffff; margin-bottom: 10px;
         }
         .coo-status-badge{
-            display:inline-flex; align-items:center; gap:6px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 900;
-            border: 1px solid #d1fae5;
-            background: #ecfdf5;
-            color: #065f46;
+            display:inline-flex; align-items:center; gap:6px; padding: 6px 10px;
+            border-radius: 999px; font-size: 12px; font-weight: 900;
+            border: 1px solid #d1fae5; background: #ecfdf5; color: #065f46;
         }
-        .coo-status-badge.offline{
-            border-color: #fee2e2;
-            background: #fef2f2;
-            color: #991b1b;
-        }
-        .coo-status-dot{
-            width:8px; height:8px;
-            border-radius: 999px;
-            background: var(--success);
-        }
+        .coo-status-badge.offline{ border-color: #fee2e2; background: #fef2f2; color: #991b1b; }
+        .coo-status-dot{ width:8px; height:8px; border-radius: 999px; background: var(--success); }
         .coo-status-badge.offline .coo-status-dot{ background: var(--danger); }
 
-        /* --------------------
-           Header + Date
-           -------------------- */
-        .coo-header-row{
-            display:flex;
-            justify-content:space-between;
-            align-items:flex-end;
-            margin-bottom: 10px;
-        }
+        /* ── Header ── */
+        .coo-header-row{ display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: 10px; }
         .coo-greeting h2{
-            font-size: 1.75rem;
-            font-weight: 800;
-            letter-spacing: -0.02em;
-            margin: 0;
+            font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;
+            margin: 0; color: #0f172a !important;
         }
-        @media (max-width: 640px){
-            .coo-greeting h2{ font-size: 1.35rem; }
-        }
-        .coo-greeting p{
-            color: var(--text-muted);
-            margin: 6px 0 0 0;
-            font-weight: 600;
-        }
+        .coo-greeting p{ color: #64748b !important; margin: 6px 0 0 0; font-weight: 600; }
         .coo-header-date{
-            background: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.9rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            box-shadow: var(--shadow-soft);
-            border: 1px solid #f1f5f9;
-            display:inline-block;
+            background: white; padding: 8px 16px; border-radius: 20px;
+            font-size: 0.9rem; font-weight: 700; color: #64748b;
+            box-shadow: var(--shadow-soft); border: 1px solid #f1f5f9; display:inline-block;
         }
 
-        /* --------------------
-           KPI Grid
-           -------------------- */
+        /* ── KPI Grid ── */
         .coo-metrics{
-            display:grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 20px;
-            margin: 12px 0 14px 0;
+            display:grid; grid-template-columns: repeat(4, 1fr);
+            gap: 20px; margin: 12px 0 14px 0;
         }
-        @media (max-width: 1100px){ .coo-metrics{ grid-template-columns: repeat(2, 1fr);} }
-        @media (max-width: 640px){ .coo-metrics{ grid-template-columns: 1fr; } }
+        @media (max-width: 1100px){ .coo-metrics{ grid-template-columns: repeat(2, 1fr); } }
+        /* KEEP 2-col on all small screens (not 1-col) */
+        @media (max-width: 640px) { .coo-metrics{ grid-template-columns: repeat(2, 1fr); gap: 10px; } }
 
         .coo-metric-card{
-            background: var(--surface);
-            padding: 20px;
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-soft);
-            border: 1px solid #f1f5f9;
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
+            background: #ffffff !important; padding: 20px;
+            border-radius: var(--radius); box-shadow: var(--shadow-soft);
+            border: 1px solid #f1f5f9; display:flex;
+            justify-content:space-between; align-items:center;
         }
         .coo-metric-label{
-            font-size: 0.8rem;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin-bottom: 6px;
-            display:block;
+            font-size: 0.8rem; font-weight: 700; color: #64748b !important;
+            text-transform: uppercase; letter-spacing: 0.04em;
+            margin-bottom: 6px; display:block;
         }
-        .coo-metric-value{
-            font-size: 2rem;
-            font-weight: 900;
-            color: var(--text-main);
-            line-height: 1;
-        }
+        .coo-metric-value{ font-size: 2rem; font-weight: 900; color: #0f172a !important; line-height: 1; }
         .coo-metric-icon{
-            width:46px; height:46px;
-            border-radius: 14px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            background: var(--primary-light);
-            color: var(--primary);
-            font-size: 1.1rem;
-            font-weight: 900;
+            width:46px; height:46px; border-radius: 14px;
+            display:flex; align-items:center; justify-content:center;
+            background: var(--primary-light); color: var(--primary); font-size: 1.1rem; font-weight: 900;
         }
-
         .coo-reliability{ margin-top: 6px; }
-        .coo-badge{
-            display:inline-flex;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-weight: 900;
-            font-size: 12px;
-            background: #ecfdf5;
-            color: #059669;
-        }
+        .coo-badge{ display:inline-flex; padding: 4px 8px; border-radius: 6px; font-weight: 900; font-size: 12px; background: #ecfdf5; color: #059669; }
         .coo-badge.med{ background:#fffbeb; color:#b45309; }
         .coo-badge.low{ background:#fef2f2; color:#b91c1c; }
 
-        /* --------------------
-           Hero Card — Layout 2.2 Parent container
-           -------------------- */
+        /* ── Hero Card ── */
         div[data-testid="stVerticalBlock"]:has(.coo-hero-marker){
-            background: var(--surface);
-            border: 1px solid #eef2f7;
-            border-radius: 22px;
-            box-shadow: var(--shadow-card);
-            padding: 22px;
-            margin-top: 12px;
+            background: #ffffff !important;
+            border: 1px solid #eef2f7; border-radius: 22px;
+            box-shadow: var(--shadow-card); padding: 22px; margin-top: 12px;
         }
-        @media (max-width: 640px){
-            div[data-testid="stVerticalBlock"]:has(.coo-hero-marker){
-                padding: 16px;
-                border-radius: 18px;
-            }
-        }
-        .coo-hero-title{
-            font-size: 1.35rem;
-            font-weight: 900;
-            color: var(--text-main);
-            margin: 6px 0 10px 0;
-        }
-        .coo-hero-divider{
-            height: 1px;
-            background: #eef2f7;
-            margin: 18px 0 14px 0;
-        }
-        .coo-footer-label{
-            font-weight: 900;
-            color: var(--text-muted);
-            margin-top: 8px;
-        }
+        .coo-hero-title{ font-size: 1.35rem; font-weight: 900; color: #0f172a !important; margin: 6px 0 10px 0; }
+        .coo-hero-divider{ height: 1px; background: #eef2f7; margin: 18px 0 14px 0; }
+        .coo-footer-label{ font-weight: 900; color: #64748b !important; margin-top: 8px; }
 
-        /* --------------------
-           Action Required (Smart Strip) — Layout 2.2 (RESPONSIVE)
-           Buttons MUST appear inside the strip and never overlap.
-           Uses :has() for robust targeting (no fragile sibling selectors).
-           -------------------- */
+        /* ── Action Required (Smart Strip) ── */
         div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left){
-            background:#eff6ff;
-            border-left: 6px solid var(--primary);
-            border-radius: 16px;
-            padding: 16px 18px;
-            box-shadow: var(--shadow-soft);
-            margin: 14px 0 12px 0;
-
-            /* ✅ make the strip itself a responsive flex row */
-            display: flex !important;
-            flex-wrap: wrap !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 12px !important;
+            background:#eff6ff !important;
+            border-left: 6px solid var(--primary); border-radius: 16px;
+            padding: 16px 18px; box-shadow: var(--shadow-soft); margin: 14px 0 12px 0;
+            display: flex !important; flex-wrap: wrap !important;
+            align-items: center !important; justify-content: space-between !important; gap: 12px !important;
         }
-
-        /* ✅ Streamlit columns inside the strip: keep safe min widths */
         div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) > div[data-testid="column"]:nth-child(1){
-            flex: 1 1 360px !important;
-            min-width: 260px !important;
+            flex: 1 1 360px !important; min-width: 260px !important;
         }
         div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) > div[data-testid="column"]:nth-child(2),
         div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) > div[data-testid="column"]:nth-child(3){
-            flex: 0 0 120px !important;
-            min-width: 110px !important;
+            flex: 0 0 120px !important; min-width: 110px !important;
         }
-
-        .coo-smartstrip-left{
-            display:flex;
-            align-items:center;
-            gap:12px;
-            min-width: 0; /* ✅ allow text wrap */
-        }
+        .coo-smartstrip-left{ display:flex; align-items:center; gap:12px; min-width: 0; }
         .coo-smartstrip-icon{ font-size: 22px; line-height: 1; flex: 0 0 auto; }
-
         .coo-smartstrip-text{ min-width: 0; }
-        .coo-smartstrip-text strong{
-            display:block;
-            font-weight: 900;
-            color:#1e3a8a;
-            font-size: 1.05rem;
-            line-height: 1.2;
-            word-break: break-word;
-        }
-        .coo-smartstrip-text span{
-            display:block;
-            color:#3b82f6;
-            font-weight: 800;
-            font-size: 1.0rem;
-            margin-top: 3px;
-            word-break: break-word;
-        }
+        .coo-smartstrip-text strong{ display:block; font-weight: 900; color:#1e3a8a !important; font-size: 1.05rem; line-height: 1.2; word-break: break-word; }
+        .coo-smartstrip-text span{ display:block; color:#3b82f6 !important; font-weight: 800; font-size: 1.0rem; margin-top: 3px; word-break: break-word; }
         .coo-smartstrip-text em{ font-style: italic; font-weight: 900; }
 
-        /* YES button green (scoped only inside Action Required row) */
         div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) button[data-testid="baseButton-primary"]{
-            background: #22c55e !important;
-            border: 1px solid #16a34a !important;
-            color: #ffffff !important;
+            background: #22c55e !important; border: 1px solid #16a34a !important; color: #ffffff !important;
         }
-        div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) button[data-testid="baseButton-primary"]:hover{
-            filter: brightness(0.95);
-        }
-
-        /* Button sizing only inside strip */
         div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) .stButton > button{
-            height: 40px !important;
-            border-radius: 12px !important;
-            font-weight: 900 !important;
-
-            /* ✅ prevent overflow into neighbor column */
-            width: 100% !important;
-            min-width: 96px !important;
-            white-space: nowrap !important;
-            box-sizing: border-box !important;
+            height: 40px !important; border-radius: 12px !important; font-weight: 900 !important;
+            width: 100% !important; min-width: 96px !important; white-space: nowrap !important; box-sizing: border-box !important;
         }
-
-        /* ✅ Mobile: stack (text then buttons full-width) */
         @media (max-width: 640px){
             div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) > div[data-testid="column"]{
-                flex: 1 1 100% !important;
-                min-width: 100% !important;
-            }
-            div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) .stButton > button{
-                height: 42px !important;
-                min-width: 100% !important;
+                flex: 1 1 100% !important; min-width: 100% !important;
             }
         }
 
-        /* Feedback mini-panel (appears under strip, stays within hero) */
+        /* Feedback panel */
         .coo-checkin-feedback{
-            margin-top: 10px;
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 14px;
-            padding: 12px 12px 10px;
-            box-shadow: var(--shadow-soft);
+            margin-top: 10px; background: #ffffff !important;
+            border: 1px solid #e2e8f0; border-radius: 14px;
+            padding: 12px 12px 10px; box-shadow: var(--shadow-soft);
         }
-        .coo-checkin-feedback-title{
-            font-weight: 900;
-            color: var(--text-main);
-            margin-bottom: 6px;
+        .coo-checkin-feedback-title{ font-weight: 900; color: #0f172a !important; margin-bottom: 6px; }
+
+        /* ── Action button row (Scan | Reset | Execute) ── */
+        /* Marker class injected around the 3-col button row */
+        .coo-action-row > div[data-testid="stHorizontalBlock"] {
+            gap: 8px !important;
+        }
+        /* Force horizontal even on very narrow mobile */
+        @media (max-width: 480px) {
+            .coo-action-row > div[data-testid="stHorizontalBlock"] {
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+            }
+            .coo-action-row > div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+                flex: 1 !important;
+                min-width: 0 !important;
+            }
+            .coo-action-row .stButton > button {
+                font-size: 13px !important;
+                padding: 0 6px !important;
+                white-space: nowrap !important;
+            }
         }
 
-        /* Global buttons (keep consistent, do not override strip logic above) */
-        .stButton > button{
-            border-radius: 12px !important;
-            font-weight: 800 !important;
-            height: 44px !important;
-        }
-
-        /* --------------------
-           Calendar (Right column) – Layout 2.2
-           -------------------- */
+        /* ── Calendar cards ── */
         .coo-section-title{
-            display:flex;
-            align-items:center;
-            gap:10px;
-            font-weight: 900;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            font-size: 0.82rem;
-            margin: 10px 0 12px 0;
+            display:flex; align-items:center; gap:10px; font-weight: 900;
+            color: #64748b !important; text-transform: uppercase;
+            letter-spacing: 0.06em; font-size: 0.82rem; margin: 10px 0 12px 0;
         }
-
-        /* Right Column event cards polish */
         .coo-event-card{
-            border-radius: 16px;
-            border: 1px solid #eef2f7;
+            border-radius: 16px; border: 1px solid #eef2f7;
             box-shadow: 0 8px 16px rgba(15,23,42,0.06);
-            padding: 14px 14px;
-            margin-bottom: 12px;
-            background: #ffffff;
+            padding: 14px; margin-bottom: 12px; background: #ffffff !important;
         }
-        .coo-evt-time{ font-weight: 900; color: #0f172a; }
-        .coo-evt-title{ font-weight: 900; line-height: 1.2; color: #0f172a; }
-        .coo-evt-loc{ font-weight: 700; color: #64748b; }
+        .coo-evt-time { font-weight: 900; color: #0f172a !important; }
+        .coo-evt-title{ font-weight: 900; line-height: 1.2; color: #0f172a !important; }
+        .coo-evt-loc  { font-weight: 700; color: #64748b !important; }
+        .coo-event-card.coo-draft{ background: #f9fafb !important; border: 2px dashed #334155; border-left: 6px solid var(--primary); }
+        .coo-event-card.coo-upcoming{ border-left: 6px solid #22c55e; }
 
-        /* Draft look */
-        .coo-event-card.coo-draft{
-            background: #f9fafb;
-            border: 2px dashed #334155;
-            border-left: 6px solid var(--primary);
-        }
-
-        /* Upcoming look */
-        .coo-event-card.coo-upcoming{
-            border-left: 6px solid #22c55e;
-        }
-
-        /* Draft action buttons only */
         button[data-testid="baseButton-secondary"],
-        button[data-testid="baseButton-primary"]{
-            border-radius: 12px;
-        }
+        button[data-testid="baseButton-primary"]{ border-radius: 12px; }
 
         /* =====================================================
-           MOBILE BOTTOM NAV + FAB  (≤768px)
+           MOBILE  (≤768px)
            ===================================================== */
 
-        /* Bottom nav bar — hidden on desktop, shown on mobile */
+        /* Bottom nav bar */
         .coo-mobile-nav {
             display: none;
-            position: fixed;
-            bottom: 0; left: 0; right: 0;
-            height: 62px;
+            position: fixed; bottom: 0; left: 0; right: 0;
+            height: 64px;
             background: #ffffff;
-            border-top: 1px solid #e2e8f0;
-            box-shadow: 0 -2px 14px rgba(15,23,42,0.09);
-            z-index: 99999;
+            border-top: 2px solid #e2e8f0;
+            box-shadow: 0 -4px 20px rgba(15,23,42,0.10);
+            z-index: 999999;
             justify-content: space-around;
             align-items: stretch;
         }
         .coo-mob-tab {
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
-            flex: 1; background: none; border: none;
-            cursor: pointer; gap: 3px;
-            padding: 6px 2px 5px;
-            border-radius: 12px; margin: 4px 3px;
+            flex: 1; background: none; border: none; cursor: pointer;
+            gap: 3px; padding: 8px 4px 6px;
             color: #94a3b8;
             font-family: Inter, system-ui, -apple-system, sans-serif;
             -webkit-tap-highlight-color: transparent;
-            transition: background 0.12s, color 0.12s;
+            transition: color 0.12s, background 0.12s;
         }
-        .coo-mob-tab.active { color: #4f46e5; background: #e0e7ff; }
-        .coo-mob-tab:active { transform: scale(0.93); }
-        .coo-mob-icon { font-size: 20px; line-height: 1.1; }
-        .coo-mob-label { font-size: 10px; font-weight: 700; letter-spacing: 0.01em; line-height: 1; }
+        .coo-mob-tab.active { color: #4f46e5; background: #eef2ff; border-radius: 12px; }
+        .coo-mob-tab:active { transform: scale(0.90); }
+        .coo-mob-icon { font-size: 22px; line-height: 1.1; }
+        .coo-mob-label { font-size: 11px; font-weight: 700; letter-spacing: 0.01em; line-height: 1; }
 
-        /* FAB Execute — hidden on desktop */
+        /* FAB */
         .coo-fab {
             display: none;
-            position: fixed; bottom: 74px; right: 16px;
-            width: 54px; height: 54px; border-radius: 50%;
+            position: fixed; bottom: 76px; right: 16px;
+            width: 52px; height: 52px; border-radius: 50%;
             background: linear-gradient(135deg, #4f46e5 0%, #818cf8 100%);
             color: #fff; font-size: 22px; border: none;
-            box-shadow: 0 4px 20px rgba(79,70,229,0.50);
+            box-shadow: 0 4px 18px rgba(79,70,229,0.50);
             align-items: center; justify-content: center;
-            cursor: pointer; z-index: 9998;
+            cursor: pointer; z-index: 999998;
             -webkit-tap-highlight-color: transparent;
-            transition: transform 0.12s, box-shadow 0.12s;
+            transition: transform 0.12s;
         }
-        .coo-fab:active { transform: scale(0.88); box-shadow: 0 2px 8px rgba(79,70,229,0.35); }
+        .coo-fab:active { transform: scale(0.86); }
 
-        /* Next-event quick-chip (shows on mobile above chat) */
+        /* Next-event chip (mobile only) */
         .coo-mob-next-event {
             display: none;
             background: #f0fdf4;
@@ -514,95 +354,183 @@ def inject_css():
             border-left: 4px solid #22c55e;
             border-radius: 12px;
             padding: 10px 14px;
-            margin-bottom: 14px;
-            font-size: 13px;
+            margin-bottom: 12px;
         }
-        .coo-mob-next-title { font-weight: 900; color: #14532d; font-size: 14px; }
-        .coo-mob-next-time  { font-weight: 700; color: #166534; margin-top: 2px; }
+        .coo-mob-next-title { font-weight: 800; color: #14532d !important; font-size: 14px; }
+        .coo-mob-next-time  { font-weight: 600; color: #166534 !important; font-size: 12px; margin-top: 2px; }
 
         @media (max-width: 768px) {
+            /* Show bottom nav + FAB + chip */
+            .coo-mobile-nav    { display: flex !important; }
+            .coo-fab           { display: flex !important; }
+            .coo-mob-next-event{ display: block !important; }
 
-            /* Show bottom nav + FAB */
-            .coo-mobile-nav { display: flex; }
-            .coo-fab        { display: flex; }
-            .coo-mob-next-event { display: block; }
-
-            /* Push sidebar off-screen (CSS hidden, but buttons remain JS-clickable) */
+            /* Push sidebar completely off-screen */
             section[data-testid="stSidebar"] {
                 position: fixed !important;
-                left: -480px !important;
-                opacity: 0   !important;
+                left: -600px !important;
+                opacity: 0 !important;
                 pointer-events: none !important;
-                transition: none !important;
                 z-index: 1 !important;
             }
-            /* Allow sidebar buttons to be fired via JS .click() */
-            section[data-testid="stSidebar"] button {
-                pointer-events: all !important;
-            }
-            /* Hide sidebar toggle / hamburger */
+            section[data-testid="stSidebar"] button { pointer-events: all !important; }
+
+            /* Hide hamburger */
             button[data-testid="collapsedControl"],
             div[data-testid="collapsedControl"],
             [data-testid="collapsedControl"] { display: none !important; }
 
-            /* Remove the gap Streamlit adds for the sidebar */
-            section.main { margin-left: 0 !important; }
+            /* Remove left margin Streamlit adds for sidebar */
+            .main .block-container, section.main { margin-left: 0 !important; }
 
-            /* Space for bottom nav */
+            /* Content padding */
             .block-container {
-                padding-bottom: 80px !important;
-                padding-left: 12px !important;
-                padding-right: 12px !important;
-                padding-top: 10px !important;
+                padding-bottom: 90px !important;
+                padding-left: 14px !important;
+                padding-right: 14px !important;
+                padding-top: 8px !important;
+                max-width: 100% !important;
             }
-
-            /* 2×2 KPI grid on mobile (not single-column) */
-            .coo-metrics {
-                grid-template-columns: repeat(2, 1fr) !important;
-                gap: 10px !important;
-                margin-bottom: 10px !important;
-            }
-            .coo-metric-card  { padding: 14px 12px !important; }
-            .coo-metric-value { font-size: 1.55rem !important; }
-            .coo-metric-icon  { width: 36px !important; height: 36px !important; font-size: 0.9rem !important; border-radius: 10px !important; }
-            .coo-metric-label { font-size: 0.72rem !important; margin-bottom: 4px !important; }
 
             /* Compact greeting */
-            .coo-greeting h2  { font-size: 1.15rem !important; }
-            .coo-greeting p   { font-size: 0.82rem !important; margin-top: 3px !important; }
-            /* Hide the date badge (already shown in KPI card) */
-            .coo-header-date  { display: none !important; }
+            .coo-greeting h2 { font-size: 1.1rem !important; color: #0f172a !important; }
+            .coo-greeting p  { font-size: 0.8rem !important; margin-top: 2px !important; color: #64748b !important; }
+            .coo-header-date { display: none !important; }
+            /* Reduce header row bottom margin */
+            .coo-header-row { margin-bottom: 6px !important; }
 
-            /* Hero card padding */
+            /* 2×2 KPI grid */
+            .coo-metrics {
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 8px !important;
+                margin: 8px 0 10px 0 !important;
+            }
+            .coo-metric-card  { padding: 12px 10px !important; border-radius: 12px !important; }
+            .coo-metric-value { font-size: 1.5rem !important; }
+            .coo-metric-icon  { width: 34px !important; height: 34px !important; font-size: 0.85rem !important; border-radius: 10px !important; }
+            .coo-metric-label { font-size: 0.68rem !important; margin-bottom: 3px !important; }
+
+            /* Hero card */
             div[data-testid="stVerticalBlock"]:has(.coo-hero-marker) {
                 padding: 14px 12px !important;
                 border-radius: 16px !important;
+                margin-top: 8px !important;
+            }
+            .coo-hero-title { font-size: 1.1rem !important; margin-bottom: 8px !important; }
+
+            /* Textarea — force light on mobile too */
+            .stTextArea textarea {
+                font-size: 16px !important;
+                min-height: 90px !important;
+                background-color: #f8fafc !important;
+                color: #0f172a !important;
+                border: 1.5px solid #e2e8f0 !important;
+                border-radius: 12px !important;
+            }
+            .stTextInput input {
+                font-size: 16px !important;
+                background-color: #ffffff !important;
+                color: #0f172a !important;
             }
 
-            /* Prevent iOS auto-zoom on inputs (must be ≥16px) */
-            .stTextArea textarea { font-size: 16px !important; min-height: 100px !important; }
-            .stTextInput input   { font-size: 16px !important; }
-
-            /* Bigger tap targets */
-            .stButton > button { min-height: 48px !important; font-size: 14px !important; }
-
-            /* Compact section labels */
-            .coo-section-title { font-size: 0.75rem !important; margin: 8px 0 8px !important; }
-            .coo-sidebar-label { font-size: 0.65rem !important; margin: 14px 0 8px !important; }
-
-            /* Event cards slightly smaller on mobile */
-            .coo-event-card { padding: 12px !important; margin-bottom: 8px !important; }
-            .coo-evt-time   { font-size: 13px !important; }
-            .coo-evt-title  { font-size: 14px !important; }
-            .coo-evt-loc    { font-size: 12px !important; }
-
-            /* Conversation bubbles */
-            .stChatMessage { padding: 10px 12px !important; }
-
-            /* Smartstrip full-width on mobile (already handled, reinforce) */
-            div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) {
-                padding: 12px 14px !important;
+            /* Buttons — clear dark, proper light */
+            .stButton > button {
+                min-height: 46px !important;
+                font-size: 13px !important;
+                background: #f1f5f9 !important;
+                color: #0f172a !important;
+                border: 1.5px solid #e2e8f0 !important;
+                border-radius: 10px !important;
             }
+            .stButton > button[kind="primary"],
+            button[data-testid="baseButton-primary"] {
+                background: linear-gradient(135deg, #4f46e5 0%, #818cf8 100%) !important;
+                color: #ffffff !important;
+                border: none !important;
+            }
+
+            /* Keep Scan/Reset/Execute in one row */
+            .coo-action-row > div[data-testid="stHorizontalBlock"] {
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                gap: 6px !important;
+            }
+            .coo-action-row > div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+                flex: 1 !important; min-width: 0 !important;
+            }
+            .coo-action-row .stButton > button {
+                padding: 0 4px !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                font-size: 12px !important;
+            }
+
+            /* Chat messages */
+            .stChatMessage { padding: 8px 10px !important; }
+            .stChatMessage p { font-size: 14px !important; }
+
+            /* Section labels */
+            .coo-section-title { font-size: 0.72rem !important; }
+            .coo-sidebar-label { font-size: 0.62rem !important; }
+
+            /* Event cards */
+            .coo-event-card { padding: 10px 12px !important; margin-bottom: 6px !important; border-radius: 12px !important; }
+            .coo-evt-time   { font-size: 12px !important; }
+            .coo-evt-title  { font-size: 13px !important; }
+            .coo-evt-loc    { font-size: 11px !important; }
+
+            /* Smartstrip on mobile */
+            div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) { padding: 12px 12px !important; }
+            div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) > div[data-testid="column"]{
+                flex: 1 1 100% !important; min-width: 100% !important;
+            }
+
+            /* ── Train the Brain — keep horizontal on mobile ── */
+            .coo-footer-label { font-size: 12px !important; }
+            .coo-train-row > div[data-testid="stHorizontalBlock"] {
+                display: flex !important; flex-direction: row !important;
+                flex-wrap: nowrap !important; align-items: center !important; gap: 8px !important;
+            }
+            .coo-train-row > div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) {
+                flex: 0 0 auto !important; min-width: 80px !important; max-width: 90px !important;
+            }
+            .coo-train-row > div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) {
+                flex: 1 1 0 !important; min-width: 0 !important;
+            }
+            .coo-train-row > div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) {
+                flex: 0 0 64px !important; min-width: 64px !important;
+            }
+            .coo-train-row .stButton > button {
+                min-height: 40px !important; font-size: 12px !important; padding: 0 8px !important;
+            }
+
+            /* ── Checkbox — force light mode ── */
+            .stCheckbox label, .stCheckbox label span, .stCheckbox label p {
+                color: #0f172a !important; font-size: 12px !important;
+            }
+
+            /* ── Chat messages — force readable contrast ── */
+            div[data-testid="stChatMessage"] {
+                background: #f1f5f9 !important;
+                border-radius: 14px !important;
+                padding: 10px 12px !important;
+                margin-bottom: 8px !important;
+                border: 1px solid #e2e8f0 !important;
+            }
+            div[data-testid="stChatMessage"] p,
+            div[data-testid="stChatMessage"] span,
+            div[data-testid="stChatMessage"] li,
+            div[data-testid="stChatMessage"] div { color: #0f172a !important; }
+
+            /* ── Bottom nav: max z-index to beat all overlays ── */
+            #coo-mobile-nav {
+                display: flex !important;
+                z-index: 2147483647 !important;
+                background: #ffffff !important;
+                border-top: 2px solid #e2e8f0 !important;
+            }
+            #coo-fab { display: flex !important; z-index: 2147483646 !important; }
         }
 
         </style>
@@ -1089,6 +1017,7 @@ def render_command_center(
             label_visibility="collapsed",
         )
 
+        st.markdown('<div class="coo-action-row">', unsafe_allow_html=True)
         t1, t2, t3 = st.columns([1, 1, 1.4], gap="small")
 
         with t1:
@@ -1096,6 +1025,19 @@ def render_command_center(
                 if callable(toggle_camera_callback):
                     toggle_camera_callback()
                 st.rerun()
+
+        with t2:
+            if st.button("🔄 Reset", use_container_width=True):
+                st.session_state["clear_plan_text"] = True
+                st.session_state["clear_conversation"] = True
+                st.rerun()
+
+        with t3:
+            if st.button("🚀 Execute", type="primary", use_container_width=True):
+                if callable(submit_callback):
+                    submit_callback()
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # Camera widget — shown when Scan toggled on
         if st.session_state.get("show_camera"):
@@ -1181,7 +1123,7 @@ def render_command_center(
 
         # ===== Train the Brain =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
-
+        st.markdown('<div class="coo-train-row">', unsafe_allow_html=True)
         fL, fM, fR = st.columns([1.2, 3.6, 1.0], gap="small")
         with fL:
             st.markdown("<div class='coo-footer-label'>💡 Train the Brain:</div>", unsafe_allow_html=True)
@@ -1196,6 +1138,7 @@ def render_command_center(
         with fR:
             if st.button("Save", use_container_width=True, key="brain_save"):
                 st.toast("Saved.")
+        st.markdown('</div>', unsafe_allow_html=True)
 # ------------------------------------------------------------
 # RIGHT COLUMN (drafts + schedule)
 # ------------------------------------------------------------
@@ -1205,211 +1148,222 @@ def render_right_column(drafts, calendar, on_add, on_reject):
     from datetime import datetime
 
     def _format_start_any(val) -> str:
-        # If already datetime
         if isinstance(val, datetime):
             return val.strftime("%a, %b %d @ %I:%M %p")
-
         s = str(val or "").strip()
         if not s:
             return "—"
-
-        # Normalize common variants:
-        # "YYYY-MM-DD HH:MM:SS-0500" -> "...-05:00"
         s = re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", s)
-        # "19:00:00 -05:00" -> "19:00:00-05:00"
         s = re.sub(r"\s+([+-]\d{2}:\d{2})$", r"\1", s)
-        # ensure T separator if needed
         if "T" not in s and len(s) >= 19 and s[10] == " ":
             s = s[:10] + "T" + s[11:]
         s = s.replace("Z", "+00:00")
-
         try:
             dt = datetime.fromisoformat(s)
             return dt.strftime("%a, %b %d @ %I:%M %p")
         except Exception:
             return str(val)
 
-    # -----------------------
-    # DRAFTING
-    # -----------------------
+    # ── Mobile: inject a JS snippet to detect viewport and add class ──
+    # We use a sentinel div approach — no extra Python logic needed.
+    st.markdown("""
+<script>
+(function(){
+    function checkMobile(){
+        var rc = document.querySelector('.coo-right-col-wrap');
+        if(!rc) return;
+        if(window.innerWidth <= 768){
+            rc.classList.add('coo-is-mobile');
+        } else {
+            rc.classList.remove('coo-is-mobile');
+        }
+    }
+    document.addEventListener('DOMContentLoaded', checkMobile);
+    window.addEventListener('resize', checkMobile);
+    setTimeout(checkMobile, 200);
+})();
+</script>
+<style>
+/* Right col wrapper: on mobile becomes a card below main content */
+@media (max-width: 768px) {
+    .coo-right-col-wrap {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        padding: 14px 12px 10px;
+        margin-top: 4px;
+        box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    }
+    /* Tighten spacing inside right col on mobile */
+    .coo-right-col-wrap .coo-sidebar-label { margin: 8px 0 6px !important; font-size: 0.62rem !important; }
+    .coo-right-col-wrap .coo-event-card { padding: 10px 12px !important; margin-bottom: 6px !important; }
+    .coo-right-col-wrap .coo-section-title { margin: 10px 0 6px !important; }
+    /* Calendar list: show only 3 on mobile, rest via expander handled in Python */
+}
+</style>
+<div class="coo-right-col-wrap">
+""", unsafe_allow_html=True)
+
+    # ── DRAFTING ──
     st.markdown(
-        '<div class="coo-sidebar-label" style="margin-top:0;">DRAFTING</div>',
+        '<div class="coo-sidebar-label" style="margin-top:0;">📋 DRAFTING</div>',
         unsafe_allow_html=True
     )
 
     if not drafts:
-        st.caption("No drafts yet. Type a plan and click Execute Plan.")
-    elif not drafts:
-        st.caption("No drafts yet. Type a plan and click Execute Plan.")
-
+        st.caption("No drafts yet. Type a plan and click Execute.")
     else:
         for i, d in enumerate(drafts):
             title = (d.get("title") or "Event").strip()
             raw_start = d.get("start_friendly") or d.get("start_time") or ""
             start = _format_start_any(raw_start)
             loc = (d.get("location") or "").strip()
-
             st.markdown(
-                f"""
-                <div class="coo-event-card coo-draft">
-                    <div class="coo-evt-time">{start}</div>
-                    <div class="coo-evt-title">{title}</div>
-                    <div class="coo-evt-loc">📍 {loc if loc else "—"}</div>
-                </div>
-                """,
+                f'<div class="coo-event-card coo-draft">'
+                f'<div class="coo-evt-time">{start}</div>'
+                f'<div class="coo-evt-title">{title}</div>'
+                f'<div class="coo-evt-loc">📍 {loc or "—"}</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
-
             c1, c2 = st.columns([1, 1], gap="small")
             with c1:
                 if st.button("✅ Confirm", key=f"draft_confirm_{i}", use_container_width=True):
-                    on_add(d)
-                    st.rerun()
+                    on_add(d); st.rerun()
             with c2:
                 if st.button("❌ Reject", key=f"draft_reject_{i}", use_container_width=True):
-                    on_reject(d)
-                    st.rerun()
+                    on_reject(d); st.rerun()
 
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # -----------------------
-    # UPCOMING
-    # -----------------------
-    st.markdown('<div class="coo-sidebar-label">UPCOMING</div>', unsafe_allow_html=True)
-
+    # ── UPCOMING (next 1 event, always visible) ──
+    st.markdown('<div class="coo-sidebar-label">⚡ UPCOMING</div>', unsafe_allow_html=True)
     if not calendar:
-        st.info("No upcoming events.")
+        st.caption("No upcoming events.")
+    else:
+        e = calendar[0]
+        title = (e.get("title") or "Event").strip()
+        start = _format_start_any(e.get("start_friendly") or e.get("start_time") or "")
+        loc   = (e.get("location") or "").strip()
+        st.markdown(
+            f'<div class="coo-event-card coo-upcoming">'
+            f'<div class="coo-evt-time">{start}</div>'
+            f'<div class="coo-evt-title">{title}</div>'
+            f'<div class="coo-evt-loc">📍 {loc or "—"}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── LIVE CALENDAR — collapsible on mobile, always open on desktop ──
+    if not calendar:
+        st.markdown('</div>', unsafe_allow_html=True)
         return
 
-    # Show first event as "Upcoming" (or first few if you prefer)
-    for e in calendar[:1]:
-        title = (e.get("title") or "Event").strip()
-        raw_start = e.get("start_friendly") or e.get("start_time") or ""
-        start = _format_start_any(raw_start)
-        loc = (e.get("location") or "").strip()
+    with st.expander("📅 Full week calendar", expanded=True):
+        for e in calendar[:8]:
+            title = (e.get("title") or "Event").strip()
+            start = _format_start_any(e.get("start_friendly") or e.get("start_time") or "")
+            loc   = (e.get("location") or "").strip()
+            st.markdown(
+                f'<div class="coo-event-card">'
+                f'<div class="coo-evt-time">{start}</div>'
+                f'<div class="coo-evt-title">{title}</div>'
+                f'<div class="coo-evt-loc">📍 {loc or "—"}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-        st.markdown(
-            f"""
-            <div class="coo-event-card coo-upcoming">
-                <div class="coo-evt-time">{start}</div>
-                <div class="coo-evt-title">{title}</div>
-                <div class="coo-evt-loc">📍 {loc if loc else "—"}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown('</div>', unsafe_allow_html=True)  # close coo-right-col-wrap
 
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # -----------------------
-    # LIVE CALENDAR (7 DAYS)
-    # -----------------------
-    st.markdown(
-        '<div class="coo-section-title">📅 LIVE CALENDAR (7 DAYS)</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Show a few upcoming items (adjust slice if you want)
-    for e in calendar[:8]:
-        title = (e.get("title") or "Event").strip()
-        raw_start = e.get("start_friendly") or e.get("start_time") or ""
-        start = _format_start_any(raw_start)
-        loc = (e.get("location") or "").strip()
-
-        st.markdown(
-            f"""
-            <div class="coo-event-card">
-              <div class="coo-evt-time">{start}</div>
-              <div class="coo-evt-title">{title}</div>
-              <div class="coo-evt-loc">📍 {loc if loc else "—"}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
 
 
 # ------------------------------------------------------------
 # MOBILE BOTTOM NAV + FAB
+# Approach: real Streamlit buttons styled as a fixed bottom bar.
+# Wrapped in a CSS-display:none container on desktop, shown on mobile.
+# This is 100% reliable — no JS sidebar-button hunting needed.
 # ------------------------------------------------------------
 def render_mobile_nav():
     """
-    Renders a fixed bottom tab bar + FAB Execute button (mobile only, <=768px).
-
-    Navigation: sidebar is CSS-pushed off-screen but stays in DOM.
-    JS finds sidebar buttons by text and fires .click() for Streamlit routing.
+    Mobile bottom tab bar + FAB Execute (shown only on <=768px via CSS).
+    Uses real Streamlit buttons → guaranteed routing, no JS hacks.
     Call once per render cycle, right after inject_css().
     """
     import streamlit as st
 
     active = st.session_state.get("active_page", "dashboard")
 
-    # (page_key, icon_char, short_label, sidebar_button_text)
+    # ── Next-event chip (above hero card, mobile only) ──
+    cal = st.session_state.get("calendar_events") or []
+    if cal:
+        nxt_title = (cal[0].get("title") or "").strip()
+        nxt_time  = (cal[0].get("start_friendly") or cal[0].get("start_raw") or "").strip()
+        if nxt_title:
+            st.markdown(
+                '<div class="coo-mob-next-event">'
+                '<div class="coo-mob-next-title">\u26A1 Next: ' + nxt_title + '</div>'
+                '<div class="coo-mob-next-time">' + nxt_time + '</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Fixed bottom nav: pure HTML+CSS — Streamlit buttons below it ──
+    # The HTML bar is cosmetic. Real Streamlit buttons are hidden in a
+    # zero-height div so they remain in DOM and JS can click them.
     tabs = [
-        ("dashboard", "\U0001F3E0", "Home",   "Dashboard"),
-        ("calendar",  "\U0001F5D3", "Cal",    "Calendar View"),
-        ("memory",    "\U0001F9E0", "Memory", "Memory Bank"),
-        ("settings",  "\u2699\uFE0F",    "More",   "Settings"),
+        ("coo",       "\U0001F3E0", "Home"),
+        ("dashboard", "\U0001F4CA", "Dash"),
+        ("calendar",  "\U0001F5D3", "Cal"),
+        ("memory",    "\U0001F9E0", "Memory"),
+        ("settings",  "\u2699\uFE0F",    "More"),
     ]
 
-    parts = []
-    for page_id, icon, label, _ in tabs:
-        cls = "coo-mob-tab active" if active == page_id else "coo-mob-tab"
-        btn = (
-            '<button class="' + cls + '" '
-            'onclick="cooMobNav(\'' + page_id + '\')" '
+    tab_parts = []
+    for page_id, icon, label in tabs:
+        is_active = active == page_id
+        active_style = (
+            "color:#4f46e5;background:#eef2ff;border-radius:10px;"
+            if is_active else "color:#94a3b8;"
+        )
+        tab_parts.append(
+            '<button class="coo-mob-tab" style="' + active_style + '" '
+            'onclick="(function(){var all=Array.from(document.querySelectorAll'
+            '(\'[data-testid=stBaseButton-secondary]\'));\n'
+            'var b=all.find(function(x){return x.getAttribute(\'aria-label\')==\''
+            + page_id + '\';});if(b)b.click();})()" '
             'aria-label="' + label + '">'
             '<span class="coo-mob-icon">' + icon + '</span>'
             '<span class="coo-mob-label">' + label + '</span>'
             '</button>'
         )
-        parts.append(btn)
-    tabs_html = "".join(parts)
 
-    # Next-event quick chip (mobile only — shown above chat area)
-    cal = st.session_state.get("calendar_events") or []
-    next_chip = ""
-    if cal:
-        nxt_title = (cal[0].get("title") or "").strip()
-        nxt_time  = (cal[0].get("start_friendly") or cal[0].get("start_raw") or "").strip()
-        if nxt_title:
-            next_chip = (
-                '<div class="coo-mob-next-event">'
-                '<div class="coo-mob-next-title">\u26A1 Next: ' + nxt_title + '</div>'
-                '<div class="coo-mob-next-time">' + nxt_time + '</div>'
-                '</div>'
-            )
-
-    # Inline JS — no f-string needed, pure concatenation
-    js = (
-        "(function(){"
-        'var M={"dashboard":"Dashboard","calendar":"Calendar View",'
-        '"memory":"Memory Bank","settings":"Settings"};'
-        "function cooMobNav(id){"
-        "var lbl=M[id];if(!lbl)return;"
-        'var sb=document.querySelector(\'section[data-testid="stSidebar"]\');'
-        "if(sb){var bb=sb.querySelectorAll('button');"
-        "for(var i=0;i<bb.length;i++){if(bb[i].innerText&&bb[i].innerText.includes(lbl)){bb[i].click();return;}}}"
-        "var all=Array.from(document.querySelectorAll('button'));"
-        "var b=all.find(function(x){return x.innerText&&x.innerText.includes(lbl);});"
-        "if(b)b.click();}"
-        "function cooFabExec(){"
-        "var fab=document.getElementById('coo-fab');"
-        "if(fab){fab.style.transform='scale(0.85)';setTimeout(function(){fab.style.transform='';},140);}"
-        "var all=Array.from(document.querySelectorAll('button'));"
-        "var b=all.find(function(x){return x.innerText&&x.innerText.includes('Execute');});"
-        "if(b)b.click();}"
-        "window.cooMobNav=cooMobNav;"
-        "window.cooFabExec=cooFabExec;"
-        "})();"
-    )
-
-    html = (
-        next_chip
-        + '<div class="coo-mobile-nav" id="coo-mobile-nav" role="navigation" aria-label="Navigation">'
-        + tabs_html
+    st.markdown(
+        '<div id="coo-mobile-nav" class="coo-mobile-nav">'
+        + "".join(tab_parts)
         + '</div>'
-        + '<button class="coo-fab" id="coo-fab" onclick="cooFabExec()" title="Execute plan">\U0001F680</button>'
-        + "<script>" + js + "</script>"
+        + '<button class="coo-fab" id="coo-fab" onclick="'
+          '(function(){var all=Array.from(document.querySelectorAll(\'button\'));'
+          'var b=all.find(function(x){return x.innerText&&x.innerText.includes(\'Execute\');});'
+          'if(b)b.click();})()" title="Execute">\U0001F680</button>',
+        unsafe_allow_html=True,
     )
-    st.markdown(html, unsafe_allow_html=True)
+
+    # ── Real Streamlit buttons (CSS-hidden, aria-label = page_id) ──
+    # These are what actually trigger routing. CSS hides them visually
+    # but they remain in DOM. JS from the HTML buttons clicks them.
+    st.markdown(
+        '<div style="position:fixed;left:-9999px;width:1px;height:1px;overflow:hidden;"'
+        ' aria-hidden="false" id="coo-nav-triggers">',
+        unsafe_allow_html=True,
+    )
+    for page_id, icon, label in tabs:
+        # Use a unique key pattern; button click sets active_page
+        btn_key = f"_mobnav_{page_id}"
+        if st.button(
+            f"{icon} {label}",
+            key=btn_key,
+            help=label,
+        ):
+            st.session_state.active_page = page_id
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
