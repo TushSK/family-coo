@@ -457,6 +457,154 @@ def inject_css():
             border-radius: 12px;
         }
 
+        /* =====================================================
+           MOBILE BOTTOM NAV + FAB  (≤768px)
+           ===================================================== */
+
+        /* Bottom nav bar — hidden on desktop, shown on mobile */
+        .coo-mobile-nav {
+            display: none;
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: 62px;
+            background: #ffffff;
+            border-top: 1px solid #e2e8f0;
+            box-shadow: 0 -2px 14px rgba(15,23,42,0.09);
+            z-index: 99999;
+            justify-content: space-around;
+            align-items: stretch;
+        }
+        .coo-mob-tab {
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            flex: 1; background: none; border: none;
+            cursor: pointer; gap: 3px;
+            padding: 6px 2px 5px;
+            border-radius: 12px; margin: 4px 3px;
+            color: #94a3b8;
+            font-family: Inter, system-ui, -apple-system, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            transition: background 0.12s, color 0.12s;
+        }
+        .coo-mob-tab.active { color: #4f46e5; background: #e0e7ff; }
+        .coo-mob-tab:active { transform: scale(0.93); }
+        .coo-mob-icon { font-size: 20px; line-height: 1.1; }
+        .coo-mob-label { font-size: 10px; font-weight: 700; letter-spacing: 0.01em; line-height: 1; }
+
+        /* FAB Execute — hidden on desktop */
+        .coo-fab {
+            display: none;
+            position: fixed; bottom: 74px; right: 16px;
+            width: 54px; height: 54px; border-radius: 50%;
+            background: linear-gradient(135deg, #4f46e5 0%, #818cf8 100%);
+            color: #fff; font-size: 22px; border: none;
+            box-shadow: 0 4px 20px rgba(79,70,229,0.50);
+            align-items: center; justify-content: center;
+            cursor: pointer; z-index: 9998;
+            -webkit-tap-highlight-color: transparent;
+            transition: transform 0.12s, box-shadow 0.12s;
+        }
+        .coo-fab:active { transform: scale(0.88); box-shadow: 0 2px 8px rgba(79,70,229,0.35); }
+
+        /* Next-event quick-chip (shows on mobile above chat) */
+        .coo-mob-next-event {
+            display: none;
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-left: 4px solid #22c55e;
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin-bottom: 14px;
+            font-size: 13px;
+        }
+        .coo-mob-next-title { font-weight: 900; color: #14532d; font-size: 14px; }
+        .coo-mob-next-time  { font-weight: 700; color: #166534; margin-top: 2px; }
+
+        @media (max-width: 768px) {
+
+            /* Show bottom nav + FAB */
+            .coo-mobile-nav { display: flex; }
+            .coo-fab        { display: flex; }
+            .coo-mob-next-event { display: block; }
+
+            /* Push sidebar off-screen (CSS hidden, but buttons remain JS-clickable) */
+            section[data-testid="stSidebar"] {
+                position: fixed !important;
+                left: -480px !important;
+                opacity: 0   !important;
+                pointer-events: none !important;
+                transition: none !important;
+                z-index: 1 !important;
+            }
+            /* Allow sidebar buttons to be fired via JS .click() */
+            section[data-testid="stSidebar"] button {
+                pointer-events: all !important;
+            }
+            /* Hide sidebar toggle / hamburger */
+            button[data-testid="collapsedControl"],
+            div[data-testid="collapsedControl"],
+            [data-testid="collapsedControl"] { display: none !important; }
+
+            /* Remove the gap Streamlit adds for the sidebar */
+            section.main { margin-left: 0 !important; }
+
+            /* Space for bottom nav */
+            .block-container {
+                padding-bottom: 80px !important;
+                padding-left: 12px !important;
+                padding-right: 12px !important;
+                padding-top: 10px !important;
+            }
+
+            /* 2×2 KPI grid on mobile (not single-column) */
+            .coo-metrics {
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 10px !important;
+                margin-bottom: 10px !important;
+            }
+            .coo-metric-card  { padding: 14px 12px !important; }
+            .coo-metric-value { font-size: 1.55rem !important; }
+            .coo-metric-icon  { width: 36px !important; height: 36px !important; font-size: 0.9rem !important; border-radius: 10px !important; }
+            .coo-metric-label { font-size: 0.72rem !important; margin-bottom: 4px !important; }
+
+            /* Compact greeting */
+            .coo-greeting h2  { font-size: 1.15rem !important; }
+            .coo-greeting p   { font-size: 0.82rem !important; margin-top: 3px !important; }
+            /* Hide the date badge (already shown in KPI card) */
+            .coo-header-date  { display: none !important; }
+
+            /* Hero card padding */
+            div[data-testid="stVerticalBlock"]:has(.coo-hero-marker) {
+                padding: 14px 12px !important;
+                border-radius: 16px !important;
+            }
+
+            /* Prevent iOS auto-zoom on inputs (must be ≥16px) */
+            .stTextArea textarea { font-size: 16px !important; min-height: 100px !important; }
+            .stTextInput input   { font-size: 16px !important; }
+
+            /* Bigger tap targets */
+            .stButton > button { min-height: 48px !important; font-size: 14px !important; }
+
+            /* Compact section labels */
+            .coo-section-title { font-size: 0.75rem !important; margin: 8px 0 8px !important; }
+            .coo-sidebar-label { font-size: 0.65rem !important; margin: 14px 0 8px !important; }
+
+            /* Event cards slightly smaller on mobile */
+            .coo-event-card { padding: 12px !important; margin-bottom: 8px !important; }
+            .coo-evt-time   { font-size: 13px !important; }
+            .coo-evt-title  { font-size: 14px !important; }
+            .coo-evt-loc    { font-size: 12px !important; }
+
+            /* Conversation bubbles */
+            .stChatMessage { padding: 10px 12px !important; }
+
+            /* Smartstrip full-width on mobile (already handled, reinforce) */
+            div[data-testid="stHorizontalBlock"]:has(.coo-smartstrip-left) {
+                padding: 12px 14px !important;
+            }
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -1179,3 +1327,89 @@ def render_right_column(drafts, calendar, on_add, on_reject):
             unsafe_allow_html=True,
         )
 
+
+
+# ------------------------------------------------------------
+# MOBILE BOTTOM NAV + FAB
+# ------------------------------------------------------------
+def render_mobile_nav():
+    """
+    Renders a fixed bottom tab bar + FAB Execute button (mobile only, <=768px).
+
+    Navigation: sidebar is CSS-pushed off-screen but stays in DOM.
+    JS finds sidebar buttons by text and fires .click() for Streamlit routing.
+    Call once per render cycle, right after inject_css().
+    """
+    import streamlit as st
+
+    active = st.session_state.get("active_page", "dashboard")
+
+    # (page_key, icon_char, short_label, sidebar_button_text)
+    tabs = [
+        ("dashboard", "\U0001F3E0", "Home",   "Dashboard"),
+        ("calendar",  "\U0001F5D3", "Cal",    "Calendar View"),
+        ("memory",    "\U0001F9E0", "Memory", "Memory Bank"),
+        ("settings",  "\u2699\uFE0F",    "More",   "Settings"),
+    ]
+
+    parts = []
+    for page_id, icon, label, _ in tabs:
+        cls = "coo-mob-tab active" if active == page_id else "coo-mob-tab"
+        btn = (
+            '<button class="' + cls + '" '
+            'onclick="cooMobNav(\'' + page_id + '\')" '
+            'aria-label="' + label + '">'
+            '<span class="coo-mob-icon">' + icon + '</span>'
+            '<span class="coo-mob-label">' + label + '</span>'
+            '</button>'
+        )
+        parts.append(btn)
+    tabs_html = "".join(parts)
+
+    # Next-event quick chip (mobile only — shown above chat area)
+    cal = st.session_state.get("calendar_events") or []
+    next_chip = ""
+    if cal:
+        nxt_title = (cal[0].get("title") or "").strip()
+        nxt_time  = (cal[0].get("start_friendly") or cal[0].get("start_raw") or "").strip()
+        if nxt_title:
+            next_chip = (
+                '<div class="coo-mob-next-event">'
+                '<div class="coo-mob-next-title">\u26A1 Next: ' + nxt_title + '</div>'
+                '<div class="coo-mob-next-time">' + nxt_time + '</div>'
+                '</div>'
+            )
+
+    # Inline JS — no f-string needed, pure concatenation
+    js = (
+        "(function(){"
+        'var M={"dashboard":"Dashboard","calendar":"Calendar View",'
+        '"memory":"Memory Bank","settings":"Settings"};'
+        "function cooMobNav(id){"
+        "var lbl=M[id];if(!lbl)return;"
+        'var sb=document.querySelector(\'section[data-testid="stSidebar"]\');'
+        "if(sb){var bb=sb.querySelectorAll('button');"
+        "for(var i=0;i<bb.length;i++){if(bb[i].innerText&&bb[i].innerText.includes(lbl)){bb[i].click();return;}}}"
+        "var all=Array.from(document.querySelectorAll('button'));"
+        "var b=all.find(function(x){return x.innerText&&x.innerText.includes(lbl);});"
+        "if(b)b.click();}"
+        "function cooFabExec(){"
+        "var fab=document.getElementById('coo-fab');"
+        "if(fab){fab.style.transform='scale(0.85)';setTimeout(function(){fab.style.transform='';},140);}"
+        "var all=Array.from(document.querySelectorAll('button'));"
+        "var b=all.find(function(x){return x.innerText&&x.innerText.includes('Execute');});"
+        "if(b)b.click();}"
+        "window.cooMobNav=cooMobNav;"
+        "window.cooFabExec=cooFabExec;"
+        "})();"
+    )
+
+    html = (
+        next_chip
+        + '<div class="coo-mobile-nav" id="coo-mobile-nav" role="navigation" aria-label="Navigation">'
+        + tabs_html
+        + '</div>'
+        + '<button class="coo-fab" id="coo-fab" onclick="cooFabExec()" title="Execute plan">\U0001F680</button>'
+        + "<script>" + js + "</script>"
+    )
+    st.markdown(html, unsafe_allow_html=True)

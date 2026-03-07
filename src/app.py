@@ -5,6 +5,7 @@ import time
 # UI only
 from src.ui import (
     inject_css,
+    render_mobile_nav,
     render_sidebar,
     render_metrics,
     render_command_center,
@@ -48,7 +49,7 @@ st.set_page_config(
     page_title="Family COO",
     page_icon="🏡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",  # auto-collapses on mobile
 )
 
 # -----------------------
@@ -56,6 +57,7 @@ st.set_page_config(
 # -----------------------
 init_state()
 inject_css()
+render_mobile_nav()  # fixed bottom nav + FAB (mobile only)
 
 # -----------------------
 # QUERY PARAM HELPERS (sid)
