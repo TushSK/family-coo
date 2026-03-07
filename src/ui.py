@@ -1021,19 +1021,19 @@ def render_command_center(
         t1, t2, t3 = st.columns([1, 1, 1.4], gap="small")
 
         with t1:
-            if st.button("📷 Scan", use_container_width=True):
+            if st.button("📷 Scan", key="coo_scan_btn", use_container_width=True):
                 if callable(toggle_camera_callback):
                     toggle_camera_callback()
                 st.rerun()
 
         with t2:
-            if st.button("🔄 Reset", use_container_width=True):
+            if st.button("🔄 Reset", key="coo_reset_btn", use_container_width=True):
                 st.session_state["clear_plan_text"] = True
                 st.session_state["clear_conversation"] = True
                 st.rerun()
 
         with t3:
-            if st.button("🚀 Execute", type="primary", use_container_width=True):
+            if st.button("🚀 Execute", key="coo_execute_btn", type="primary", use_container_width=True):
                 if callable(submit_callback):
                     submit_callback()
                 st.rerun()
@@ -1053,19 +1053,6 @@ def render_command_center(
             )
             if cam_img:
                 st.success("✅ Image captured — click 🚀 Execute to process.")
-
-        with t2:
-            if st.button("🔄 Reset", use_container_width=True):
-                # ✅ Deferred clear (no direct mutation of widget key here)
-                st.session_state["clear_plan_text"] = True
-                st.session_state["clear_conversation"] = True
-                st.rerun()
-
-        with t3:
-            if st.button("🚀 Execute", type="primary", use_container_width=True):
-                if callable(submit_callback):
-                    submit_callback()
-                st.rerun()
 
         # ===== Conversation =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
