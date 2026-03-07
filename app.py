@@ -5,6 +5,8 @@ import time
 # UI only
 from src.ui import (
     inject_css,
+    render_mobile_nav,
+    render_topnav,
     render_sidebar,
     render_metrics,
     render_command_center,
@@ -48,7 +50,7 @@ st.set_page_config(
     page_title="Family COO",
     page_icon="🏡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded",  # expanded on desktop; collapses to hamburger on mobile
 )
 
 # -----------------------
@@ -56,6 +58,7 @@ st.set_page_config(
 # -----------------------
 init_state()
 inject_css()
+render_mobile_nav()  # fixed bottom nav + FAB (mobile only)
 
 # -----------------------
 # QUERY PARAM HELPERS (sid)
@@ -231,7 +234,7 @@ from src.flow import checkin_yes_learning, checkin_no_with_feedback  # noqa: F40
 _active_page = st.session_state.get("active_page", "coo")
 
 if _active_page != "coo":
-    # ── All non-COO tabs routed through pages.py (zero LLM) ──
+    render_topnav()   # mobile-only sticky nav (CSS-hidden on desktop)
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE
     try:
         _pending_missions = 1 if _gpr() else 0
@@ -261,7 +264,7 @@ if _active_page != "coo":
     )
 
 else:
-    # ── Original COO view (UNCHANGED) ──
+    render_topnav()   # mobile-only sticky nav (CSS-hidden on desktop)
     kpis = compute_kpis(user_name=st.session_state.get("user_name", "Tushar"))
     checkin_item, checkin_mode = get_checkin_context()
 
