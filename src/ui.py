@@ -1351,74 +1351,127 @@ def render_right_column(drafts, calendar, on_add, on_reject):
     st.markdown('</div>', unsafe_allow_html=True)  # close coo-right-col-wrap
 
 
-
-
-
-
-# ──────────────────────────────────────────────────────────────────
-# MOBILE NAV — final design
+# ═══════════════════════════════════════════════════════════════════════
+# MOBILE NAV  —  hidden st.radio approach
 #
-# render_nav_triggers():
-#   Renders 5 real st.button() elements with plain ASCII labels
-#   ("nav-home", "nav-dash", etc.). Each directly sets active_page
-#   and reruns — no URL manipulation, no query_params dependency.
-#   JS hides them off-screen via setTimeout (no CSS :has()).
-#
-# render_mobile_nav():
-#   Pure HTML bottom bar. onclick: scans DOM for the matching ASCII
-#   button by textContent and calls .click(). Reliable on all mobile
-#   browsers because there is no emoji in the button text.
+# WHY EVERYTHING ELSE FAILED:
+#   - Hidden st.button + JS click: buttons flashed visibly before hide
+#   - Clicking sidebar buttons: sidebar is CSS-transformed off-screen on
+#     mobile; Streamlit's React event system ignores synthetic clicks on
+#     visually off-screen elements (confirmed Streamlit limitation)
+#   - history.replaceState + query_params: Streamlit reads query_params
+#     from the WebSocket session URL, not the live browser URL bar —
+#     changes via JS are invisible to Python
 #
 # WHY THIS WORKS:
-#   st.button click -> WebSocket msg -> Python reruns -> session OK.
-#   history.replaceState was dropped: Streamlit reads query_params
-#   from the WebSocket session URL, NOT the live browser URL bar.
+#   st.radio renders native <input type="radio"> elements. When JS calls
+#   input.click() on a radio that is CSS-hidden (position:fixed off-screen),
+#   the browser fires a real DOM 'change' event. Streamlit's React layer
+#   listens to these DOM events regardless of visual state. The rerun
+#   fires normally, session state is preserved, spinner shows.
+#
+#   The CSS hides the radio BEFORE first paint using a direct class selector
+#   on the stRadio container — no :has(), no JS timing dependency.
+# ═══════════════════════════════════════════════════════════════════════
+
+_NAV_PAGES = ["coo", "dashboard", "calendar", "memory", "settings"]
+
+
 def render_nav_triggers():
-    """No-op stub. Kept so app.py import doesn't break.
-    Hidden-button approach removed — it caused nav-home/nav-dash labels
-    to flash in the main content area before CSS/JS could hide them.
-    Mobile nav now clicks the existing sidebar buttons directly.
     """
-    pass
+    Hidden st.radio — the single source of truth for mobile navigation.
+    CSS hides it before first paint. JS clicks the radio inputs to trigger
+    real Streamlit reruns from the mobile bottom bar.
+    Called once per page render in app.py before the main content.
+    """
+    import streamlit as st
+
+    # Inject CSS to hide the radio container before it paints.
+    # Target the sentinel class we add via markdown wrapper.
+    # position:fixed + left:-9999px = in DOM, JS-clickable, never visible.
+    st.markdown(
+        """<style>
+        div.coo-nav-radio-wrap,
+        div.coo-nav-radio-wrap * {
+            position: fixed !important;
+            left: -9999px !important;
+            top: 0 !important;
+            width: 1px !important;
+            height: 1px !important;
+            overflow: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
+            z-index: -1 !important;
+        }
+        /* Re-enable pointer-events on the actual inputs so JS .click() works */
+        div.coo-nav-radio-wrap input[type="radio"] {
+            pointer-events: auto !important;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="coo-nav-radio-wrap">', unsafe_allow_html=True)
+
+    current = st.session_state.get("active_page", "coo")
+    # Ensure current is a valid option
+    if current not in _NAV_PAGES:
+        current = "coo"
+
+    choice = st.radio(
+        "nav",
+        options=_NAV_PAGES,
+        index=_NAV_PAGES.index(current),
+        key="coo_nav_radio",
+        label_visibility="hidden",
+        horizontal=True,
+    )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # If radio value changed (JS clicked a different input), navigate
+    if choice and choice != current:
+        st.session_state.active_page = choice
+        st.rerun()
 
 
 def render_mobile_nav():
-    """HTML bottom bar (visible at <=768px) + Execute FAB.
+    """
+    HTML bottom bar visible at <=768px + Execute FAB.
 
-    Each tab onclick finds the matching sidebar button by English word
-    (no emoji, no hidden buttons, no timing races) and calls .click().
-    The sidebar buttons (Home, Dashboard, Calendar, Memory Bank, Settings)
-    are always in the DOM — clicking them fires the normal Streamlit
-    WebSocket rerun, preserving session state and showing the spinner.
+    Each tab onclick:
+      1. Finds the hidden st.radio inputs by their container class
+      2. Clicks the radio input at the correct index
+      3. Streamlit's React onChange fires -> Python reruns -> navigation works
+
+    The radio inputs are at fixed positions (index 0-4) in the DOM, so
+    JS uses querySelectorAll('input[type="radio"]') scoped to the radio wrap.
+    No emoji matching, no sidebar dependency, no URL tricks.
     """
     import streamlit as st
 
     active = st.session_state.get("active_page", "coo")
 
     TABS = [
-        ("coo",       "\U0001f3e0",        "Home",  "Home"),
-        ("dashboard", "\U0001f4ca",        "Dash",  "Dashboard"),
-        ("calendar",  "\U0001f5d3\ufe0f",  "Cal",   "Calendar"),
-        ("memory",    "\U0001f9e0",        "Brain", "Memory"),
-        ("settings",  "\u2699\ufe0f",      "More",  "Settings"),
+        ("coo",       "\U0001f3e0",        "Home",  0),
+        ("dashboard", "\U0001f4ca",        "Dash",  1),
+        ("calendar",  "\U0001f5d3\ufe0f",  "Cal",   2),
+        ("memory",    "\U0001f9e0",        "Brain", 3),
+        ("settings",  "\u2699\ufe0f",      "More",  4),
     ]
 
     tab_parts = []
-    for page_id, icon, short, word in TABS:
+    for page_id, icon, short, idx in TABS:
         active_cls = " active" if active == page_id else ""
-        # Scope to sidebar so we don't match unrelated buttons.
-        # textContent.includes(word) — plain English, no emoji — works on
-        # every mobile browser without Unicode normalization issues.
+        # Find radio inputs scoped to our hidden nav container.
+        # Click the one at position `idx` — order matches _NAV_PAGES list.
         js = (
             "(function(){"
-            "var s=document.querySelector('[data-testid=\"stSidebar\"]')"
-            "||document.body;"
-            "var bb=s.querySelectorAll('button');"
-            "var w='" + word + "';"
-            "for(var i=0;i<bb.length;i++){"
-            "if(bb[i].textContent&&bb[i].textContent.includes(w))"
-            "{bb[i].click();return;}"
-            "}"
+            "var wrap=document.querySelector('.coo-nav-radio-wrap');"
+            "if(!wrap){return;}"
+            "var inputs=wrap.querySelectorAll('input[type=\"radio\"]');"
+            "var inp=inputs[" + str(idx) + "];"
+            "if(inp){inp.click();}"
             "})()"
         )
         tab_parts.append(

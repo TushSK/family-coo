@@ -251,11 +251,12 @@ if _qp_tz and not st.session_state.get("user_tz"):
     st.session_state.user_tz = _qp_tz
     st.session_state.calendar_events = None  # force re-fetch with correct TZ
 
-# NOTE: ?page= was used with history.replaceState nav (now removed).
-# Navigation is handled entirely by render_nav_triggers() real st.buttons.
+# Navigation: render_nav_triggers() places a hidden st.radio in the DOM.
+# Mobile bottom bar JS clicks radio inputs to trigger real Streamlit reruns.
+# render_nav_triggers() also reads the radio value and updates active_page.
 _active_page = st.session_state.get("active_page", "coo")
 
-render_nav_triggers()  # off-screen real buttons — JS clicks these for mobile nav
+render_nav_triggers()  # hidden radio — mobile nav clicks these inputs
 
 if _active_page != "coo":
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE
