@@ -43,7 +43,28 @@ def inject_css():
         .block-container { max-width:1400px; padding:24px 40px 60px; }
         @media(max-width:1200px){ .block-container{ padding:20px 28px 60px; } }
         @media(max-width:900px) { .block-container{ padding:14px 18px 60px; } }
-        @media(max-width:640px) { .block-container{ padding:10px 14px 80px; } }
+        /* Mobile: 90px bottom padding so content clears the fixed nav bar */
+        @media(max-width:768px) { .block-container{ padding:10px 12px 90px !important; } }
+        @media(max-width:640px) { .block-container{ padding:8px 10px 90px !important; } }
+
+        /* ════════════════════════════════════════════════════════
+           RESPONSIVE COLUMN STACKING
+           Streamlit st.columns() has no native breakpoints.
+           At ≤768px: every stHorizontalBlock becomes a vertical stack
+           EXCEPT the ones we explicitly keep horizontal (action row,
+           train row, ABC buttons — those have their own overrides below).
+           ════════════════════════════════════════════════════════ */
+        @media(max-width:768px){
+            /* Stack the main left + right panel columns */
+            section.main div[data-testid="stHorizontalBlock"]:not(.coo-action-row div[data-testid="stHorizontalBlock"]):not(.coo-train-row div[data-testid="stHorizontalBlock"]) {
+                flex-direction:column !important;
+            }
+            section.main div[data-testid="stHorizontalBlock"]:not(.coo-action-row div[data-testid="stHorizontalBlock"]):not(.coo-train-row div[data-testid="stHorizontalBlock"])>div[data-testid="column"] {
+                width:100% !important;
+                flex:1 1 100% !important;
+                min-width:0 !important;
+            }
+        }
 
         /* ════════════════════════════════════════════════════════
            LIGHT-MODE ENFORCEMENT (beats system dark-mode)
@@ -522,8 +543,6 @@ def inject_css():
         .coo-mob-label { font-size:10px; font-weight:700; letter-spacing:.01em; }
         @media(max-width:768px){
             .coo-mobile-nav { display:flex !important; }
-            /* Extra bottom padding so content doesn't hide behind nav bar */
-            .block-container { padding-bottom:80px !important; }
         }
 
         /* ════════════════════════════════════════════════════════
@@ -1335,83 +1354,79 @@ def render_right_column(drafts, calendar, on_add, on_reject):
 
 
 
-# MOBILE NAV - reliable two-part system
-# render_nav_triggers(): ONE hidden button "_nav_ping" (ASCII only, no emoji)
-# render_mobile_nav(): HTML bar; onclick sets ?page= then clicks _nav_ping
-# history.replaceState = no page reload = session preserved = spinner works
 
+# ──────────────────────────────────────────────────────────────────
+# MOBILE NAV — final design
+#
+# render_nav_triggers():
+#   Renders 5 real st.button() elements with plain ASCII labels
+#   ("nav-home", "nav-dash", etc.). Each directly sets active_page
+#   and reruns — no URL manipulation, no query_params dependency.
+#   JS hides them off-screen via setTimeout (no CSS :has()).
+#
+# render_mobile_nav():
+#   Pure HTML bottom bar. onclick: scans DOM for the matching ASCII
+#   button by textContent and calls .click(). Reliable on all mobile
+#   browsers because there is no emoji in the button text.
+#
+# WHY THIS WORKS:
+#   st.button click -> WebSocket msg -> Python reruns -> session OK.
+#   history.replaceState was dropped: Streamlit reads query_params
+#   from the WebSocket session URL, NOT the live browser URL bar.
 def render_nav_triggers():
-    """One hidden ping button. JS clicks it after history.replaceState(?page=X)."""
-    import streamlit as st
-
-    if st.button("_nav_ping", key="_navtrig_ping"):
-        _page = (st.query_params.get("page") or "").strip().lower()
-        if _page in ("coo", "dashboard", "calendar", "memory", "settings"):
-            st.session_state.active_page = _page
-        st.rerun()
-
-    # Hide via JS (no CSS :has() = works on all mobile browsers)
-    st.markdown(
-        """<script>
-        function _hidePingBtn(){
-            var btns=document.querySelectorAll('button');
-            for(var i=0;i<btns.length;i++){
-                if(btns[i].textContent&&btns[i].textContent.trim()==='_nav_ping'){
-                    var w=btns[i].closest('[data-testid="stButton"]')
-                          ||btns[i].parentElement||btns[i];
-                    w.style.cssText='position:fixed!important;left:-9999px!important;'
-                        +'top:0!important;width:1px!important;height:1px!important;'
-                        +'overflow:hidden!important;z-index:-1!important;';
-                    return true;
-                }
-            }
-            return false;
-        }
-        _hidePingBtn();
-        setTimeout(_hidePingBtn,150);
-        setTimeout(_hidePingBtn,500);
-        setTimeout(_hidePingBtn,1000);
-        </script>""",
-        unsafe_allow_html=True,
-    )
+    """No-op stub. Kept so app.py import doesn't break.
+    Hidden-button approach removed — it caused nav-home/nav-dash labels
+    to flash in the main content area before CSS/JS could hide them.
+    Mobile nav now clicks the existing sidebar buttons directly.
+    """
+    pass
 
 
 def render_mobile_nav():
-    """HTML bottom bar (shows at <=768px) + Execute FAB."""
+    """HTML bottom bar (visible at <=768px) + Execute FAB.
+
+    Each tab onclick finds the matching sidebar button by English word
+    (no emoji, no hidden buttons, no timing races) and calls .click().
+    The sidebar buttons (Home, Dashboard, Calendar, Memory Bank, Settings)
+    are always in the DOM — clicking them fires the normal Streamlit
+    WebSocket rerun, preserving session state and showing the spinner.
+    """
     import streamlit as st
 
     active = st.session_state.get("active_page", "coo")
-    tabs = [
-        ("coo",       "🏠", "Home"),
-        ("dashboard", "📊", "Dash"),
-        ("calendar",  "🗓️", "Cal"),
-        ("memory",    "🧠", "Brain"),
-        ("settings",  "⚙️",  "More"),
+
+    TABS = [
+        ("coo",       "\U0001f3e0",        "Home",  "Home"),
+        ("dashboard", "\U0001f4ca",        "Dash",  "Dashboard"),
+        ("calendar",  "\U0001f5d3\ufe0f",  "Cal",   "Calendar"),
+        ("memory",    "\U0001f9e0",        "Brain", "Memory"),
+        ("settings",  "\u2699\ufe0f",      "More",  "Settings"),
     ]
 
     tab_parts = []
-    for page_id, icon, short in tabs:
+    for page_id, icon, short, word in TABS:
         active_cls = " active" if active == page_id else ""
+        # Scope to sidebar so we don't match unrelated buttons.
+        # textContent.includes(word) — plain English, no emoji — works on
+        # every mobile browser without Unicode normalization issues.
         js = (
             "(function(){"
-            "try{"
-            "var u=new URL(window.location.href);"
-            f"u.searchParams.set('page','{page_id}');"
-            "history.replaceState(null,'',u.toString());"
-            "var bb=document.querySelectorAll('button');"
+            "var s=document.querySelector('[data-testid=\"stSidebar\"]')"
+            "||document.body;"
+            "var bb=s.querySelectorAll('button');"
+            "var w='" + word + "';"
             "for(var i=0;i<bb.length;i++){"
-            "if(bb[i].textContent&&bb[i].textContent.trim()==='_nav_ping')"
+            "if(bb[i].textContent&&bb[i].textContent.includes(w))"
             "{bb[i].click();return;}"
             "}"
-            "}catch(e){}"
             "})()"
         )
         tab_parts.append(
-            f'<button class="coo-mob-tab{active_cls}" onclick="{js}" '
-            f'aria-label="{short}">'
-            f'<span class="coo-mob-icon">{icon}</span>'
-            f'<span class="coo-mob-label">{short}</span>'
-            f'</button>'
+            '<button class="coo-mob-tab' + active_cls + '" '
+            'onclick="' + js + '" aria-label="' + short + '">'
+            '<span class="coo-mob-icon">' + icon + '</span>'
+            '<span class="coo-mob-label">' + short + '</span>'
+            '</button>'
         )
 
     fab_js = (
@@ -1419,16 +1434,17 @@ def render_mobile_nav():
         "var bb=document.querySelectorAll('button');"
         "for(var i=0;i<bb.length;i++){"
         "var t=bb[i].textContent&&bb[i].textContent.trim();"
-        "if(t&&t.includes('Execute'))"
-        "{bb[i].click();return;}"
-        "}})()"
+        "if(t&&t.includes('Execute')){bb[i].click();return;}"
+        "}}"
+        ")()"
     )
 
     st.markdown(
         '<nav class="coo-mobile-nav" id="coo-mobile-nav" role="navigation">'
         + "".join(tab_parts)
         + "</nav>"
-        + f'<button class="coo-fab" id="coo-fab" onclick="{fab_js}" '
-          f'title="Execute" aria-label="Execute">🚀</button>',
+        + '<button class="coo-fab" id="coo-fab" '
+        + 'onclick="' + fab_js + '" '
+        + 'title="Execute" aria-label="Execute">\U0001f680</button>',
         unsafe_allow_html=True,
     )

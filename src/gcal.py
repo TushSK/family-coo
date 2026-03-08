@@ -324,7 +324,7 @@ def save_token_from_device_flow(user_id: str, token_response: Dict[str, Any]) ->
 # PUBLIC API: EVENTS
 # -----------------------
 # User-facing display timezone — set once per session by set_display_tz().
-# Defaults to None which falls back to dt.astimezone() (server local TZ on Cloud).
+# Defaults to "America/New_York" if not set — never falls back to server UTC.).
 _DISPLAY_TZ: str | None = None
 
 def set_display_tz(tz_name: str) -> None:
@@ -336,21 +336,20 @@ def set_display_tz(tz_name: str) -> None:
 
 def format_friendly_date(iso_str: str) -> str:
     """Converts ISO string to 'Fri, Feb 13 @ 5:00 PM' or 'Fri, Feb 13 (All Day)'.
-    Uses user's browser timezone if set via set_display_tz(); falls back to server local."""
+    Uses user's browser timezone (_DISPLAY_TZ); falls back to America/New_York,
+    never to server UTC. _DISPLAY_TZ is set by flow.refresh_calendar() and by
+    app.py on every render via set_display_tz(session_state.user_tz)."""
     try:
         if not iso_str:
             return ""
         if "T" in iso_str:
             dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-            _tz = _DISPLAY_TZ
-            if _tz:
-                try:
-                    from zoneinfo import ZoneInfo
-                except ImportError:
-                    from backports.zoneinfo import ZoneInfo  # type: ignore
-                dt = dt.astimezone(ZoneInfo(_tz))
-            else:
-                dt = dt.astimezone()
+            _tz_name = _DISPLAY_TZ or "America/New_York"   # never fall back to UTC
+            try:
+                from zoneinfo import ZoneInfo
+            except ImportError:
+                from backports.zoneinfo import ZoneInfo  # type: ignore
+            dt = dt.astimezone(ZoneInfo(_tz_name))
             return dt.strftime("%a, %b %d @ %I:%M %p")
         dt = datetime.strptime(iso_str, "%Y-%m-%d")
         return dt.strftime("%a, %b %d (All Day)")
@@ -501,7 +500,12 @@ def add_event_to_calendar(*args, **kwargs) -> Tuple[bool, str, Optional[str]]:
 
             start_dt = datetime.fromisoformat(start_str)
             if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc).astimezone()
+                _tz_name = _DISPLAY_TZ or "America/New_York"
+                try:
+                    from zoneinfo import ZoneInfo as _ZI
+                except ImportError:
+                    from backports.zoneinfo import ZoneInfo as _ZI  # type: ignore
+                start_dt = start_dt.replace(tzinfo=timezone.utc).astimezone(_ZI(_tz_name))
 
             end_dt = (
                 datetime.fromisoformat(event.get("end_time"))

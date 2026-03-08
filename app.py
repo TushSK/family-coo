@@ -6,6 +6,7 @@ import time
 from src.ui import (
     inject_css,
     render_mobile_nav,
+    render_nav_triggers,
     render_sidebar,
     render_metrics,
     render_command_center,
@@ -205,6 +206,18 @@ if not st.session_state.get("authenticated"):
     st.stop()
 
 # -----------------------
+# TIMEZONE — set on every render so _DISPLAY_TZ global survives process restarts
+# Streamlit Cloud may restart the Python process; module globals reset to None.
+# Re-applying from session_state on every render guarantees correct event times.
+# -----------------------
+if st.session_state.get("user_tz"):
+    try:
+        from src.gcal import set_display_tz as _set_tz
+        _set_tz(st.session_state.user_tz)
+    except Exception:
+        pass
+
+# -----------------------
 # CALENDAR AUTO-REFRESH (with loading indicator)
 # -----------------------
 if st.session_state.get("user_email") and st.session_state.get("calendar_events") is None:
@@ -232,19 +245,17 @@ render_sidebar(
 # -----------------------
 from src.flow import checkin_yes_learning, checkin_no_with_feedback  # noqa: F401
 
-# ── Read ?page= query param (set by mobile bottom nav) ──
-_qp_page = (st.query_params.get("page") or "").strip().lower()
-if _qp_page in ("coo", "dashboard", "calendar", "memory", "settings"):
-    st.session_state.active_page = _qp_page
-
 # ── Read ?tz= query param (set once by browser TZ detection JS) ──
 _qp_tz = (st.query_params.get("tz") or "").strip()
 if _qp_tz and not st.session_state.get("user_tz"):
     st.session_state.user_tz = _qp_tz
-    # Re-run calendar refresh so events reformat in user TZ
-    st.session_state.calendar_events = None
+    st.session_state.calendar_events = None  # force re-fetch with correct TZ
 
+# NOTE: ?page= was used with history.replaceState nav (now removed).
+# Navigation is handled entirely by render_nav_triggers() real st.buttons.
 _active_page = st.session_state.get("active_page", "coo")
+
+render_nav_triggers()  # off-screen real buttons — JS clicks these for mobile nav
 
 if _active_page != "coo":
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE

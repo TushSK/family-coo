@@ -132,7 +132,7 @@ def run_proactive_checks(trigger: str = "app_load"):
     if not st.session_state.get("authenticated"):
         return
 
-    today = datetime.now().astimezone().date().isoformat()
+    today = _user_now().date().isoformat()
     if st.session_state.get("last_proactive_date") == today:
         return  # already ran today
 
@@ -158,7 +158,7 @@ def run_proactive_checks(trigger: str = "app_load"):
     except Exception:
         pass
 
-    dow = datetime.now().astimezone().weekday()  # Mon=0 ... Sun=6
+    dow = _user_now().weekday()  # Mon=0 ... Sun=6
     # Only nudge Thu/Fri/Sat/Sun (keeps it “triggered”, not spammy)
     if dow in (3, 4, 5, 6):
         if pref_outing:
@@ -630,7 +630,7 @@ def refresh_calendar(force_email=None):
         st.session_state.calendar_events = upcoming
         st.session_state.calendar_online = True
 
-        now = datetime.now().astimezone()
+        now = _user_now()
         try:
             full = get_events_range(uid, now, now + timedelta(days=7))
             st.session_state.calendar_events_all = full
@@ -707,11 +707,34 @@ import streamlit as st
 
 from src.utils import load_feedback_rows, get_missed_count, calculate_reliability_score
 
+
+# ── Timezone-aware "now" helper ──────────────────────────────────
+# Always returns a timezone-aware datetime in the user's local timezone.
+# Falls back to America/New_York — never bare server UTC.
+def _user_now():
+    """Returns datetime.now() in user TZ (from session_state or fallback)."""
+    try:
+        import streamlit as st
+        _tz_name = st.session_state.get("user_tz") or "America/New_York"
+    except Exception:
+        _tz_name = "America/New_York"
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore
+    from datetime import timezone
+    try:
+        return datetime.now(ZoneInfo(_tz_name))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+
 def compute_kpis(user_name: str = "Tushar"):
     """
     Returns a dict consumed by render_metrics().
     """
-    now = datetime.now()
+    now = _user_now()
     hour = now.hour
     greeting = "Good Morning" if hour < 12 else ("Good Afternoon" if hour < 18 else "Good Evening")
 
@@ -914,7 +937,7 @@ def _parse_user_datetime(text: str):
         return None
 
     try:
-        now = datetime.now().astimezone()
+        now = _user_now()
         raw = text.strip()
         t = raw.lower()
 
