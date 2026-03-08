@@ -1355,7 +1355,7 @@ def render_nav_triggers():
 
 def render_mobile_nav():
     """
-    Mobile bottom nav bar using pure HTML anchor tags.
+    Mobile top nav bar using pure HTML anchor tags.
     No JavaScript, no iframes, no CORS issues.
     Each tab is an <a href="?page=X&sid=Y&tz=Z" target="_self"> link.
     Visible only on mobile (<=768px) via CSS media query.
@@ -1397,17 +1397,17 @@ def render_mobile_nav():
     st.markdown(
         f"""
         <style>
-        /* ── Mobile bottom nav container ── */
+        /* ── Mobile top nav container ── */
         .coo-mobile-nav-container {{
             display: none;                  /* hidden on desktop */
             position: fixed;
-            bottom: 0; left: 0; right: 0;
+            top: 0; left: 0; right: 0;      /* Pinned to the top */
             height: 62px;
             background: rgba(255,255,255,0.97);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
-            border-top: 1px solid #e2e8f0;
-            box-shadow: 0 -4px 20px rgba(15,23,42,0.08);
+            border-bottom: 1px solid #e2e8f0; /* Border moved to bottom */
+            box-shadow: 0 4px 20px rgba(15,23,42,0.08); /* Shadow pointing down */
             z-index: 2147483647;
             justify-content: space-around;
             align-items: stretch;
@@ -1417,7 +1417,8 @@ def render_mobile_nav():
                 display: flex !important;
             }}
             .block-container {{
-                padding-bottom: 90px !important;
+                padding-top: 80px !important;    /* Push app content down */
+                padding-bottom: 20px !important; /* Clean up bottom space */
             }}
         }}
 
