@@ -26,6 +26,9 @@ from src.gcal import (
     save_token_from_device_flow
 )
 from src.utils import (
+    MISSION_FILE,
+    MEMORY_FILE,
+    purge_stale_missions,
     load_memory,
     log_mission_start,
     upsert_calendar_missions,
@@ -100,7 +103,9 @@ def init_state():
         "authenticated": False,
         "checkin_feedback_open": False,
         "checkin_feedback_text": "",
-        "show_camera": False
+        "show_camera": False,
+        "_abc_choice_pending": "",
+        "clear_conversation": False
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -305,6 +310,23 @@ def execute_plan_logic(user_text: str, image_obj=None):
     else:
         st.session_state["selected_idea"] = ""
 
+    # ---- build missions + feedback context ----
+    try:
+        import json as _json
+        from src.utils import _read_json
+        _m_rows = _read_json(MISSION_FILE)
+        missions_dump = _json.dumps(
+            [{"title": m.get("title",""), "status": m.get("status",""), "end_time": m.get("end_time","")}
+             for m in (_m_rows or [])[-20:]], ensure_ascii=False)
+    except Exception:
+        missions_dump = "[]"
+
+    try:
+        _fb_rows = load_feedback_rows(limit=20)
+        feedback_dump = _json.dumps(_fb_rows or [], ensure_ascii=False)
+    except Exception:
+        feedback_dump = "[]"
+
     # ---- call brain ----
     raw = get_coo_response(
     api_key=api_key,
@@ -321,6 +343,8 @@ def execute_plan_logic(user_text: str, image_obj=None):
     # ✅ 2.8A continuity wiring (deterministic)
     idea_options=st.session_state.get("idea_options") or [],
     selected_idea=st.session_state.get("selected_idea") or "",
+    missions_dump=missions_dump,
+    feedback_dump=feedback_dump,
     )
     print("BRAIN_RAW:", raw)
     data = _extract_json(raw)
@@ -438,16 +462,33 @@ def apply_deferred_ui_resets():
     """
     Applies deferred resets BEFORE widgets are instantiated.
     Must be called early in app.py (before render_command_center).
+    BUG-12: ABC buttons write to _abc_choice_pending (staging key).
+    This copies it to plan_text and fires execute_plan_logic before any
+    widget is created, avoiding Streamlit widget-key conflicts.
     """
     import streamlit as st
+
+    # BUG-12: handle deferred ABC choice
+    _pending_choice = (st.session_state.get("_abc_choice_pending") or "").strip()
+    if _pending_choice:
+        st.session_state["plan_text"] = _pending_choice
+        st.session_state["_abc_choice_pending"] = ""
+        execute_plan_logic(_pending_choice)
+        return
 
     if st.session_state.get("defer_train_brain_reset"):
         # These keys are used by widgets; safe ONLY before widgets are created.
         st.session_state["brain_correction"] = ""
         st.session_state["brain_bad_response"] = False
-
-        # Clear the deferred flag
         st.session_state["defer_train_brain_reset"] = False
+
+    if st.session_state.get("clear_plan_text"):
+        st.session_state["plan_text"] = ""
+        st.session_state["clear_plan_text"] = False
+
+    if st.session_state.get("clear_conversation"):
+        st.session_state["chat_history"] = []
+        st.session_state["clear_conversation"] = False
 
 import re
 
@@ -583,6 +624,7 @@ def refresh_calendar(force_email=None):
             from gcal import set_display_tz as _sdtz  # type: ignore
         _sdtz(_user_tz)
 
+    purge_stale_missions()
     upcoming = get_upcoming_events_list(user_id=uid, days=7)
     if upcoming is not None:
         st.session_state.calendar_events = upcoming

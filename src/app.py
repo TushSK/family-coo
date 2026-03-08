@@ -6,6 +6,7 @@ import time
 from src.ui import (
     inject_css,
     render_mobile_nav,
+    render_nav_triggers,
     render_sidebar,
     render_metrics,
     render_command_center,
@@ -49,7 +50,7 @@ st.set_page_config(
     page_title="Family COO",
     page_icon="🏡",
     layout="wide",
-    initial_sidebar_state="auto",  # auto-collapses on mobile
+    initial_sidebar_state="expanded",  # expanded on desktop; collapses to hamburger on mobile
 )
 
 # -----------------------
@@ -205,10 +206,23 @@ if not st.session_state.get("authenticated"):
     st.stop()
 
 # -----------------------
-# CALENDAR AUTO-REFRESH (light touch)
+# TIMEZONE — set on every render so _DISPLAY_TZ global survives process restarts
+# Streamlit Cloud may restart the Python process; module globals reset to None.
+# Re-applying from session_state on every render guarantees correct event times.
+# -----------------------
+if st.session_state.get("user_tz"):
+    try:
+        from src.gcal import set_display_tz as _set_tz
+        _set_tz(st.session_state.user_tz)
+    except Exception:
+        pass
+
+# -----------------------
+# CALENDAR AUTO-REFRESH (with loading indicator)
 # -----------------------
 if st.session_state.get("user_email") and st.session_state.get("calendar_events") is None:
-    refresh_calendar()
+    with st.spinner("📅 Loading your calendar…"):
+        refresh_calendar()
 
 # -----------------------
 # SIDEBAR
@@ -230,10 +244,24 @@ render_sidebar(
 # All other pages → existing metrics + two-column COO layout (unchanged)
 # -----------------------
 from src.flow import checkin_yes_learning, checkin_no_with_feedback  # noqa: F401
+
+# ── Read ?tz= query param (set once by browser TZ detection JS) ──
+_qp_tz = (st.query_params.get("tz") or "").strip()
+if _qp_tz and not st.session_state.get("user_tz"):
+    st.session_state.user_tz = _qp_tz
+    st.session_state.calendar_events = None  # force re-fetch with correct TZ
+
+# NOTE: ?page= is set by render_nav_triggers() JS via history.replaceState.
+# Reading it here is a fallback for direct URL loads on mobile.
+_qp_page = (st.query_params.get("page") or "").strip().lower()
+if _qp_page in ("coo", "dashboard", "calendar", "memory", "settings"):
+    st.session_state.active_page = _qp_page
+
 _active_page = st.session_state.get("active_page", "coo")
 
+render_nav_triggers()  # off-screen real buttons — JS clicks these for mobile nav
+
 if _active_page != "coo":
-    # ── All non-COO tabs routed through pages.py (zero LLM) ──
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE
     try:
         _pending_missions = 1 if _gpr() else 0
@@ -263,7 +291,6 @@ if _active_page != "coo":
     )
 
 else:
-    # ── Original COO view (UNCHANGED) ──
     kpis = compute_kpis(user_name=st.session_state.get("user_name", "Tushar"))
     checkin_item, checkin_mode = get_checkin_context()
 

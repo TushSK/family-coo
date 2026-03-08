@@ -601,18 +601,19 @@ def inject_css():
         @media(max-width:768px){ .coo-fab{ display:flex !important; } }
         </style>
         <script>
-        /* One-shot browser timezone detection.
-           Reads Intl API, appends ?tz=<zone> to URL once so Streamlit
-           can pick it up via st.query_params["tz"] on next render. */
+        /* One-shot TZ detection. Guard: only reload if ?tz= not in URL.
+           After reload ?tz= IS in URL so no second reload. Loop-safe.
+           NOTE: Does not use browser storage of any kind - avoids the bug
+           where storage flags persist through Streamlit Cloud server
+           restarts and block TZ detection for returning users. */
         (function() {
             try {
+                var u = new URL(window.location.href);
+                if (u.searchParams.get('tz')) return;
                 var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
                 if (!tz) return;
-                var u = new URL(window.location.href);
-                if (!u.searchParams.get('tz')) {
-                    u.searchParams.set('tz', tz);
-                    window.location.replace(u.toString());
-                }
+                u.searchParams.set('tz', tz);
+                window.location.replace(u.toString());
             } catch(e) {}
         })();
         </script>""",
@@ -1333,15 +1334,50 @@ def render_right_column(drafts, calendar, on_add, on_reject):
 
 
 
-# ------------------------------------------------------------
-# MOBILE BOTTOM NAV  +  FAB
-# Pure HTML/CSS — zero Streamlit buttons. No DOM manipulation.
-# Navigation: each tab sets window.location.href = "?page=X"
-# app.py reads ?page= query param and updates active_page.
-# This is the ONLY reliable mobile nav approach in Streamlit.
-# ------------------------------------------------------------
+
+# MOBILE NAV - reliable two-part system
+# render_nav_triggers(): ONE hidden button "_nav_ping" (ASCII only, no emoji)
+# render_mobile_nav(): HTML bar; onclick sets ?page= then clicks _nav_ping
+# history.replaceState = no page reload = session preserved = spinner works
+
+def render_nav_triggers():
+    """One hidden ping button. JS clicks it after history.replaceState(?page=X)."""
+    import streamlit as st
+
+    if st.button("_nav_ping", key="_navtrig_ping"):
+        _page = (st.query_params.get("page") or "").strip().lower()
+        if _page in ("coo", "dashboard", "calendar", "memory", "settings"):
+            st.session_state.active_page = _page
+        st.rerun()
+
+    # Hide via JS (no CSS :has() = works on all mobile browsers)
+    st.markdown(
+        """<script>
+        function _hidePingBtn(){
+            var btns=document.querySelectorAll('button');
+            for(var i=0;i<btns.length;i++){
+                if(btns[i].textContent&&btns[i].textContent.trim()==='_nav_ping'){
+                    var w=btns[i].closest('[data-testid="stButton"]')
+                          ||btns[i].parentElement||btns[i];
+                    w.style.cssText='position:fixed!important;left:-9999px!important;'
+                        +'top:0!important;width:1px!important;height:1px!important;'
+                        +'overflow:hidden!important;z-index:-1!important;';
+                    return true;
+                }
+            }
+            return false;
+        }
+        _hidePingBtn();
+        setTimeout(_hidePingBtn,150);
+        setTimeout(_hidePingBtn,500);
+        setTimeout(_hidePingBtn,1000);
+        </script>""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_mobile_nav():
-    """Fixed bottom nav + Execute FAB. CSS shows at ≤768px only."""
+    """HTML bottom bar (shows at <=768px) + Execute FAB."""
     import streamlit as st
 
     active = st.session_state.get("active_page", "coo")
@@ -1354,39 +1390,45 @@ def render_mobile_nav():
     ]
 
     tab_parts = []
-    for page_id, icon, label in tabs:
+    for page_id, icon, short in tabs:
         active_cls = " active" if active == page_id else ""
-        # Preserve ?tz= param while switching page
-        nav_js = (
-            f"(function(){{"
-            f"var u=new URL(window.location.href);"
+        js = (
+            "(function(){"
+            "try{"
+            "var u=new URL(window.location.href);"
             f"u.searchParams.set('page','{page_id}');"
-            f"window.location.href=u.toString();"
-            f"}})()"
+            "history.replaceState(null,'',u.toString());"
+            "var bb=document.querySelectorAll('button');"
+            "for(var i=0;i<bb.length;i++){"
+            "if(bb[i].textContent&&bb[i].textContent.trim()==='_nav_ping')"
+            "{bb[i].click();return;}"
+            "}"
+            "}catch(e){}"
+            "})()"
         )
         tab_parts.append(
-            f'<button class="coo-mob-tab{active_cls}" onclick="{nav_js}" '
-            f'aria-label="{label}">'
+            f'<button class="coo-mob-tab{active_cls}" onclick="{js}" '
+            f'aria-label="{short}">'
             f'<span class="coo-mob-icon">{icon}</span>'
-            f'<span class="coo-mob-label">{label}</span>'
+            f'<span class="coo-mob-label">{short}</span>'
             f'</button>'
         )
 
-    # FAB: click real Execute button in main content by text match
     fab_js = (
         "(function(){"
-        "var bb=document.querySelectorAll('button[data-testid]');"
+        "var bb=document.querySelectorAll('button');"
         "for(var i=0;i<bb.length;i++){"
-        "if(bb[i].innerText&&bb[i].innerText.trim().includes('Execute'))"
+        "var t=bb[i].textContent&&bb[i].textContent.trim();"
+        "if(t&&t.includes('Execute'))"
         "{bb[i].click();return;}"
         "}})()"
     )
 
     st.markdown(
         '<nav class="coo-mobile-nav" id="coo-mobile-nav" role="navigation">'
-        + "".join(tab_parts) +
-        '</nav>'
-        f'<button class="coo-fab" id="coo-fab" onclick="{fab_js}" '
-        f'title="Execute" aria-label="Execute">🚀</button>',
+        + "".join(tab_parts)
+        + "</nav>"
+        + f'<button class="coo-fab" id="coo-fab" onclick="{fab_js}" '
+          f'title="Execute" aria-label="Execute">🚀</button>',
         unsafe_allow_html=True,
     )
