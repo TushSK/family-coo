@@ -514,36 +514,7 @@ def inject_css():
             }
         }
 
-        /* ════════════════════════════════════════════════════════
-           MOBILE BOTTOM NAV BAR  (≤768px only)
-           ════════════════════════════════════════════════════════ */
-        .coo-mobile-nav {
-            display:none;
-            position:fixed; bottom:0; left:0; right:0;
-            height:62px; z-index:2147483647;
-            background:rgba(255,255,255,0.97);
-            backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
-            border-top:1px solid #e2e8f0;
-            box-shadow:0 -4px 20px rgba(15,23,42,0.08);
-            justify-content:space-around; align-items:stretch;
-        }
-        .coo-mob-tab {
-            display:flex; flex-direction:column;
-            align-items:center; justify-content:center;
-            flex:1; background:none; border:none; cursor:pointer;
-            gap:3px; padding:8px 4px 6px;
-            color:#94a3b8; font-family:Inter,system-ui,sans-serif;
-            -webkit-tap-highlight-color:transparent;
-            transition:color .14s,background .14s;
-            border-radius:10px; margin:3px;
-        }
-        .coo-mob-tab.active { color:#4f46e5; background:#eef2ff; }
-        .coo-mob-tab:active { transform:scale(.90); }
-        .coo-mob-icon  { font-size:20px; line-height:1; }
-        .coo-mob-label { font-size:10px; font-weight:700; letter-spacing:.01em; }
-        @media(max-width:768px){
-            .coo-mobile-nav { display:flex !important; }
-        }
+        /* mobile nav CSS injected inline by render_mobile_nav() */
 
         /* ════════════════════════════════════════════════════════
            CAMERA WIDGET  — make it large, usable, and clear
@@ -1351,64 +1322,46 @@ def render_right_column(drafts, calendar, on_add, on_reject):
     st.markdown('</div>', unsafe_allow_html=True)  # close coo-right-col-wrap
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# MOBILE NAV  —  st.components.v1.html() approach (definitive)
+# ═══════════════════════════════════════════════════════════════════
+# MOBILE NAV  —  pure <a> anchor tag approach (final)
 #
-# WHY EVERY PREVIOUS APPROACH FAILED:
+# WHY PREVIOUS APPROACHES FAILED:
+#   - st.components.v1.html iframe: window.parent.location.replace()
+#     throws a silent SecurityError on Streamlit Cloud because the
+#     iframe is served from a different subdomain (CORS block).
+#   - iframe CSS title selector: Streamlit changes iframe title attrs
+#     between versions (stHtml, components.v1.html, st_html) — selector
+#     never matched, nav rendered inline at top of page.
+#   - st.button/radio JS .click(): React synthetic events on
+#     visually-hidden elements don't propagate to Streamlit's root
+#     event container on mobile.
+#   - history.replaceState: Streamlit reads query_params from the
+#     WebSocket session URL, not the live browser URL bar.
 #
-#   st.markdown onclick attributes:
-#     onclick attrs DO fire. But querySelector('.coo-nav-radio-wrap input')
-#     finds 0 elements because st.markdown open/close div tricks DON'T
-#     wrap subsequent Streamlit widgets — each widget gets its own
-#     stVerticalBlock outside our div. So JS found nothing to click.
-#
-#   st.markdown <script> tags:
-#     React's dangerouslySetInnerHTML never executes <script> tags —
-#     browser security. Hide scripts never ran. Radio stayed visible.
-#
-#   Sidebar button .click():
-#     React 17+ registers events on the root container, not document.
-#     Streamlit Cloud may portal the sidebar outside the root container.
-#     Programmatic .click() dispatches at element level but bubbles to a
-#     container React isn't watching. No rerun fires.
-#
-# WHY st.components.v1.html() WORKS:
-#
-#   Components render in a real iframe with sandbox="allow-scripts".
-#   onclick handlers inside the iframe execute without restriction.
-#   window.parent.location.replace(url) navigates the PARENT page.
-#   The ?sid= param is preserved so auth survives the reconnect.
-#   ?page=X is read by Python on the new session → active_page is set.
-#   This is exactly how Streamlit's own multi-page navigation works.
-#
-# NOTE ON SESSION RECONNECT:
-#   Each navigation replaces the URL → Streamlit reconnects WebSocket.
-#   Auth is preserved via ?sid= (already in URL from login flow).
-#   TZ is preserved via ?tz= param.
-#   Calendar data re-fetches (fast, cached server-side).
-# ═══════════════════════════════════════════════════════════════════════
+# WHY <a> TAGS WORK:
+#   Standard browser anchor navigation (<a href="?page=X" target="_self">)
+#   has zero CORS restrictions, works on every browser/OS, and requires
+#   no JavaScript whatsoever. It causes a full page load which Streamlit
+#   reconnects normally. ?sid=, ?tz= are preserved in the URL.
+#   app.py reads ?page= on reconnect and sets active_page.
+# ═══════════════════════════════════════════════════════════════════
 
 
 def render_nav_triggers():
-    """No-op. Navigation is handled entirely by render_mobile_nav()
-    via st.components.v1.html(). Called by app.py for compatibility."""
+    """No-op stub. Kept so app.py import doesn't break.
+    Navigation uses pure <a> anchor tags in render_mobile_nav()."""
     pass
 
 
 def render_mobile_nav():
     """
-    Renders the mobile bottom nav bar using st.components.v1.html().
-
-    The component iframe (sandbox="allow-scripts allow-same-origin") runs
-    real JS. onclick handlers use window.parent.location.replace() to
-    navigate with ?page=X while preserving ?sid= and ?tz= params.
-
-    On desktop: the iframe has height=0 and the nav HTML is display:none
-    inside the iframe — invisible, zero layout impact.
-    On mobile (<=768px): the CSS inside the iframe shows the nav bar.
+    Mobile bottom nav bar using pure HTML anchor tags.
+    No JavaScript, no iframes, no CORS issues.
+    Each tab is an <a href="?page=X&sid=Y&tz=Z" target="_self"> link.
+    Visible only on mobile (<=768px) via CSS media query.
     """
     import streamlit as st
-    import json
+    import urllib.parse
 
     active = st.session_state.get("active_page", "coo")
 
@@ -1420,107 +1373,78 @@ def render_mobile_nav():
         ("settings",  "⚙️",  "More"),
     ]
 
-    # Build tab HTML — onclick uses window.parent to navigate
-    tab_html_parts = []
+    # Carry all existing query params (sid, tz, etc.) forward so auth
+    # and timezone survive the navigation reload.
+    try:
+        base_params = dict(st.query_params)
+    except Exception:
+        base_params = {}
+    # Remove stale page param — we'll set it fresh per tab
+    base_params.pop("page", None)
+
+    tab_html = []
     for page_id, icon, label in TABS:
         active_cls = "active" if active == page_id else ""
-        tab_html_parts.append(f"""
-        <button class="tab {active_cls}" onclick="navigate('{page_id}')">
-          <span class="icon">{icon}</span>
-          <span class="lbl">{label}</span>
-        </button>""")
+        params = {**base_params, "page": page_id}
+        href = "?" + urllib.parse.urlencode(params, doseq=True)
+        tab_html.append(
+            f'<a href="{href}" target="_self" class="coo-mob-tab {active_cls}">'
+            f'<span class="coo-mob-icon">{icon}</span>'
+            f'<span class="coo-mob-label">{label}</span>'
+            f'</a>'
+        )
 
-    tabs_html = "\n".join(tab_html_parts)
+    st.markdown(
+        f"""
+        <style>
+        /* ── Mobile bottom nav container ── */
+        .coo-mobile-nav-container {{
+            display: none;                  /* hidden on desktop */
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: 62px;
+            background: rgba(255,255,255,0.97);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-top: 1px solid #e2e8f0;
+            box-shadow: 0 -4px 20px rgba(15,23,42,0.08);
+            z-index: 2147483647;
+            justify-content: space-around;
+            align-items: stretch;
+        }}
+        @media (max-width: 768px) {{
+            .coo-mobile-nav-container {{
+                display: flex !important;
+            }}
+            .block-container {{
+                padding-bottom: 90px !important;
+            }}
+        }}
 
-    component_html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ background:transparent; overflow:hidden; }}
+        /* ── Tab link styles ── */
+        a.coo-mob-tab {{
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            flex: 1; text-decoration: none;
+            gap: 3px; padding: 8px 4px 6px;
+            color: #94a3b8;
+            font-family: Inter, system-ui, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            transition: background 0.15s, color 0.15s;
+            border-radius: 10px; margin: 3px;
+        }}
+        a.coo-mob-tab.active {{
+            color: #4f46e5;
+            background: #eef2ff;
+        }}
+        a.coo-mob-tab:active {{ transform: scale(0.92); }}
+        a.coo-mob-tab .coo-mob-icon  {{ font-size: 20px; line-height: 1; }}
+        a.coo-mob-tab .coo-mob-label {{ font-size: 10px; font-weight: 700; letter-spacing: 0.01em; }}
+        </style>
 
-  /* Nav bar — only shown on mobile via media query */
-  nav {{
-    display: none;
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    height: 62px;
-    background: rgba(255,255,255,0.97);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-top: 1px solid #e2e8f0;
-    box-shadow: 0 -4px 20px rgba(15,23,42,0.08);
-    justify-content: space-around;
-    align-items: stretch;
-    z-index: 9999;
-  }}
-  @media (max-width: 768px) {{
-    nav {{ display: flex !important; }}
-  }}
-
-  .tab {{
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    flex: 1; background: none; border: none;
-    cursor: pointer; gap: 3px; padding: 8px 4px 6px;
-    color: #94a3b8;
-    font-family: Inter, system-ui, sans-serif;
-    -webkit-tap-highlight-color: transparent;
-    transition: background 0.15s, color 0.15s;
-  }}
-  .tab.active {{ color: #4f46e5; background: #eef2ff; }}
-  .tab:active {{ transform: scale(0.92); }}
-  .icon {{ font-size: 20px; line-height: 1; }}
-  .lbl  {{ font-size: 10px; font-weight: 700; letter-spacing: 0.01em; }}
-</style>
-</head>
-<body>
-<nav id="nav">
-  {tabs_html}
-</nav>
-<script>
-  function navigate(page) {{
-    try {{
-      var u = new URL(window.parent.location.href);
-      u.searchParams.set('page', page);
-      window.parent.location.replace(u.toString());
-    }} catch(e) {{
-      // fallback: just set the param on current URL
-      window.parent.location.href = '?page=' + page;
-    }}
-  }}
-</script>
-</body>
-</html>"""
-
-    # height=62 shows the nav bar; on desktop it's hidden by CSS media query
-    # but we still need the iframe height ≥ 62 for mobile rendering.
-    # We use CSS to position this component's iframe at the bottom of the screen.
-    st.components.v1.html(component_html, height=62, scrolling=False)
-
-    # CSS to position the component iframe at the bottom of the screen
-    # and give main content bottom padding so it doesn't hide under the nav.
-    st.markdown("""<style>
-    /* Position the nav component iframe at fixed bottom */
-    iframe[title="components.v1.html"] {
-        position: fixed !important;
-        bottom: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        width: 100% !important;
-        height: 62px !important;
-        z-index: 2147483647 !important;
-        border: none !important;
-        display: none !important;  /* hidden on desktop */
-    }
-    @media (max-width: 768px) {
-        iframe[title="components.v1.html"] {
-            display: block !important;
-        }
-        /* Padding so page content isn't hidden behind the nav */
-        .block-container {
-            padding-bottom: 80px !important;
-        }
-    }
-    </style>""", unsafe_allow_html=True)
+        <div class="coo-mobile-nav-container">
+            {"".join(tab_html)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
