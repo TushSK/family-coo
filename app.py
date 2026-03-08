@@ -245,18 +245,27 @@ render_sidebar(
 # -----------------------
 from src.flow import checkin_yes_learning, checkin_no_with_feedback  # noqa: F401
 
+# ── Read ?page= query param (set by mobile nav component on reconnect) ──
+# Mobile nav uses window.parent.location.replace(?page=X) which causes a
+# Streamlit reconnect. On the new session, we read ?page= here to restore
+# the user's intended destination. ?sid= and ?tz= survive the replace too.
+_qp_page = (st.query_params.get("page") or "").strip().lower()
+if _qp_page in ("coo", "dashboard", "calendar", "memory", "settings"):
+    st.session_state.active_page = _qp_page
+
 # ── Read ?tz= query param (set once by browser TZ detection JS) ──
 _qp_tz = (st.query_params.get("tz") or "").strip()
 if _qp_tz and not st.session_state.get("user_tz"):
     st.session_state.user_tz = _qp_tz
     st.session_state.calendar_events = None  # force re-fetch with correct TZ
 
-# Navigation: render_nav_triggers() places a hidden st.radio in the DOM.
-# Mobile bottom bar JS clicks radio inputs to trigger real Streamlit reruns.
-# render_nav_triggers() also reads the radio value and updates active_page.
+# Navigation: render_nav_triggers() is a no-op (kept for import compat).
+# Mobile nav is rendered by render_mobile_nav() via st.components.v1.html().
+# Component onclick fires real JS → window.parent.location.replace(?page=X)
+# → Streamlit reconnects → ?page= read above → active_page set.
 _active_page = st.session_state.get("active_page", "coo")
 
-render_nav_triggers()  # hidden radio — mobile nav clicks these inputs
+render_nav_triggers()  # no-op stub — kept for import compatibility
 
 if _active_page != "coo":
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE

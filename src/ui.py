@@ -1352,152 +1352,175 @@ def render_right_column(drafts, calendar, on_add, on_reject):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# MOBILE NAV  —  hidden st.radio approach
+# MOBILE NAV  —  st.components.v1.html() approach (definitive)
 #
-# WHY EVERYTHING ELSE FAILED:
-#   - Hidden st.button + JS click: buttons flashed visibly before hide
-#   - Clicking sidebar buttons: sidebar is CSS-transformed off-screen on
-#     mobile; Streamlit's React event system ignores synthetic clicks on
-#     visually off-screen elements (confirmed Streamlit limitation)
-#   - history.replaceState + query_params: Streamlit reads query_params
-#     from the WebSocket session URL, not the live browser URL bar —
-#     changes via JS are invisible to Python
+# WHY EVERY PREVIOUS APPROACH FAILED:
 #
-# WHY THIS WORKS:
-#   st.radio renders native <input type="radio"> elements. When JS calls
-#   input.click() on a radio that is CSS-hidden (position:fixed off-screen),
-#   the browser fires a real DOM 'change' event. Streamlit's React layer
-#   listens to these DOM events regardless of visual state. The rerun
-#   fires normally, session state is preserved, spinner shows.
+#   st.markdown onclick attributes:
+#     onclick attrs DO fire. But querySelector('.coo-nav-radio-wrap input')
+#     finds 0 elements because st.markdown open/close div tricks DON'T
+#     wrap subsequent Streamlit widgets — each widget gets its own
+#     stVerticalBlock outside our div. So JS found nothing to click.
 #
-#   The CSS hides the radio BEFORE first paint using a direct class selector
-#   on the stRadio container — no :has(), no JS timing dependency.
+#   st.markdown <script> tags:
+#     React's dangerouslySetInnerHTML never executes <script> tags —
+#     browser security. Hide scripts never ran. Radio stayed visible.
+#
+#   Sidebar button .click():
+#     React 17+ registers events on the root container, not document.
+#     Streamlit Cloud may portal the sidebar outside the root container.
+#     Programmatic .click() dispatches at element level but bubbles to a
+#     container React isn't watching. No rerun fires.
+#
+# WHY st.components.v1.html() WORKS:
+#
+#   Components render in a real iframe with sandbox="allow-scripts".
+#   onclick handlers inside the iframe execute without restriction.
+#   window.parent.location.replace(url) navigates the PARENT page.
+#   The ?sid= param is preserved so auth survives the reconnect.
+#   ?page=X is read by Python on the new session → active_page is set.
+#   This is exactly how Streamlit's own multi-page navigation works.
+#
+# NOTE ON SESSION RECONNECT:
+#   Each navigation replaces the URL → Streamlit reconnects WebSocket.
+#   Auth is preserved via ?sid= (already in URL from login flow).
+#   TZ is preserved via ?tz= param.
+#   Calendar data re-fetches (fast, cached server-side).
 # ═══════════════════════════════════════════════════════════════════════
-
-_NAV_PAGES = ["coo", "dashboard", "calendar", "memory", "settings"]
 
 
 def render_nav_triggers():
-    """
-    Hidden st.radio — the single source of truth for mobile navigation.
-    CSS hides it before first paint. JS clicks the radio inputs to trigger
-    real Streamlit reruns from the mobile bottom bar.
-    Called once per page render in app.py before the main content.
-    """
-    import streamlit as st
-
-    # Inject CSS to hide the radio container before it paints.
-    # Target the sentinel class we add via markdown wrapper.
-    # position:fixed + left:-9999px = in DOM, JS-clickable, never visible.
-    st.markdown(
-        """<style>
-        div.coo-nav-radio-wrap,
-        div.coo-nav-radio-wrap * {
-            position: fixed !important;
-            left: -9999px !important;
-            top: 0 !important;
-            width: 1px !important;
-            height: 1px !important;
-            overflow: hidden !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-            z-index: -1 !important;
-        }
-        /* Re-enable pointer-events on the actual inputs so JS .click() works */
-        div.coo-nav-radio-wrap input[type="radio"] {
-            pointer-events: auto !important;
-        }
-        </style>""",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="coo-nav-radio-wrap">', unsafe_allow_html=True)
-
-    current = st.session_state.get("active_page", "coo")
-    # Ensure current is a valid option
-    if current not in _NAV_PAGES:
-        current = "coo"
-
-    choice = st.radio(
-        "nav",
-        options=_NAV_PAGES,
-        index=_NAV_PAGES.index(current),
-        key="coo_nav_radio",
-        label_visibility="hidden",
-        horizontal=True,
-    )
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # If radio value changed (JS clicked a different input), navigate
-    if choice and choice != current:
-        st.session_state.active_page = choice
-        st.rerun()
+    """No-op. Navigation is handled entirely by render_mobile_nav()
+    via st.components.v1.html(). Called by app.py for compatibility."""
+    pass
 
 
 def render_mobile_nav():
     """
-    HTML bottom bar visible at <=768px + Execute FAB.
+    Renders the mobile bottom nav bar using st.components.v1.html().
 
-    Each tab onclick:
-      1. Finds the hidden st.radio inputs by their container class
-      2. Clicks the radio input at the correct index
-      3. Streamlit's React onChange fires -> Python reruns -> navigation works
+    The component iframe (sandbox="allow-scripts allow-same-origin") runs
+    real JS. onclick handlers use window.parent.location.replace() to
+    navigate with ?page=X while preserving ?sid= and ?tz= params.
 
-    The radio inputs are at fixed positions (index 0-4) in the DOM, so
-    JS uses querySelectorAll('input[type="radio"]') scoped to the radio wrap.
-    No emoji matching, no sidebar dependency, no URL tricks.
+    On desktop: the iframe has height=0 and the nav HTML is display:none
+    inside the iframe — invisible, zero layout impact.
+    On mobile (<=768px): the CSS inside the iframe shows the nav bar.
     """
     import streamlit as st
+    import json
 
     active = st.session_state.get("active_page", "coo")
 
     TABS = [
-        ("coo",       "\U0001f3e0",        "Home",  0),
-        ("dashboard", "\U0001f4ca",        "Dash",  1),
-        ("calendar",  "\U0001f5d3\ufe0f",  "Cal",   2),
-        ("memory",    "\U0001f9e0",        "Brain", 3),
-        ("settings",  "\u2699\ufe0f",      "More",  4),
+        ("coo",       "🏠", "Home"),
+        ("dashboard", "📊", "Dash"),
+        ("calendar",  "🗓️", "Cal"),
+        ("memory",    "🧠", "Brain"),
+        ("settings",  "⚙️",  "More"),
     ]
 
-    tab_parts = []
-    for page_id, icon, short, idx in TABS:
-        active_cls = " active" if active == page_id else ""
-        # Find radio inputs scoped to our hidden nav container.
-        # Click the one at position `idx` — order matches _NAV_PAGES list.
-        js = (
-            "(function(){"
-            "var wrap=document.querySelector('.coo-nav-radio-wrap');"
-            "if(!wrap){return;}"
-            "var inputs=wrap.querySelectorAll('input[type=\"radio\"]');"
-            "var inp=inputs[" + str(idx) + "];"
-            "if(inp){inp.click();}"
-            "})()"
-        )
-        tab_parts.append(
-            '<button class="coo-mob-tab' + active_cls + '" '
-            'onclick="' + js + '" aria-label="' + short + '">'
-            '<span class="coo-mob-icon">' + icon + '</span>'
-            '<span class="coo-mob-label">' + short + '</span>'
-            '</button>'
-        )
+    # Build tab HTML — onclick uses window.parent to navigate
+    tab_html_parts = []
+    for page_id, icon, label in TABS:
+        active_cls = "active" if active == page_id else ""
+        tab_html_parts.append(f"""
+        <button class="tab {active_cls}" onclick="navigate('{page_id}')">
+          <span class="icon">{icon}</span>
+          <span class="lbl">{label}</span>
+        </button>""")
 
-    fab_js = (
-        "(function(){"
-        "var bb=document.querySelectorAll('button');"
-        "for(var i=0;i<bb.length;i++){"
-        "var t=bb[i].textContent&&bb[i].textContent.trim();"
-        "if(t&&t.includes('Execute')){bb[i].click();return;}"
-        "}}"
-        ")()"
-    )
+    tabs_html = "\n".join(tab_html_parts)
 
-    st.markdown(
-        '<nav class="coo-mobile-nav" id="coo-mobile-nav" role="navigation">'
-        + "".join(tab_parts)
-        + "</nav>"
-        + '<button class="coo-fab" id="coo-fab" '
-        + 'onclick="' + fab_js + '" '
-        + 'title="Execute" aria-label="Execute">\U0001f680</button>',
-        unsafe_allow_html=True,
-    )
+    component_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:transparent; overflow:hidden; }}
+
+  /* Nav bar — only shown on mobile via media query */
+  nav {{
+    display: none;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    height: 62px;
+    background: rgba(255,255,255,0.97);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid #e2e8f0;
+    box-shadow: 0 -4px 20px rgba(15,23,42,0.08);
+    justify-content: space-around;
+    align-items: stretch;
+    z-index: 9999;
+  }}
+  @media (max-width: 768px) {{
+    nav {{ display: flex !important; }}
+  }}
+
+  .tab {{
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    flex: 1; background: none; border: none;
+    cursor: pointer; gap: 3px; padding: 8px 4px 6px;
+    color: #94a3b8;
+    font-family: Inter, system-ui, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, color 0.15s;
+  }}
+  .tab.active {{ color: #4f46e5; background: #eef2ff; }}
+  .tab:active {{ transform: scale(0.92); }}
+  .icon {{ font-size: 20px; line-height: 1; }}
+  .lbl  {{ font-size: 10px; font-weight: 700; letter-spacing: 0.01em; }}
+</style>
+</head>
+<body>
+<nav id="nav">
+  {tabs_html}
+</nav>
+<script>
+  function navigate(page) {{
+    try {{
+      var u = new URL(window.parent.location.href);
+      u.searchParams.set('page', page);
+      window.parent.location.replace(u.toString());
+    }} catch(e) {{
+      // fallback: just set the param on current URL
+      window.parent.location.href = '?page=' + page;
+    }}
+  }}
+</script>
+</body>
+</html>"""
+
+    # height=62 shows the nav bar; on desktop it's hidden by CSS media query
+    # but we still need the iframe height ≥ 62 for mobile rendering.
+    # We use CSS to position this component's iframe at the bottom of the screen.
+    st.components.v1.html(component_html, height=62, scrolling=False)
+
+    # CSS to position the component iframe at the bottom of the screen
+    # and give main content bottom padding so it doesn't hide under the nav.
+    st.markdown("""<style>
+    /* Position the nav component iframe at fixed bottom */
+    iframe[title="components.v1.html"] {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        height: 62px !important;
+        z-index: 2147483647 !important;
+        border: none !important;
+        display: none !important;  /* hidden on desktop */
+    }
+    @media (max-width: 768px) {
+        iframe[title="components.v1.html"] {
+            display: block !important;
+        }
+        /* Padding so page content isn't hidden behind the nav */
+        .block-container {
+            padding-bottom: 80px !important;
+        }
+    }
+    </style>""", unsafe_allow_html=True)

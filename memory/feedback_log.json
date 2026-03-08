@@ -262,5 +262,11 @@
         "feedback": "User completed this. Reason: Completed",
         "rating": "\ud83d\udc4d",
         "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-08",
+        "mission": "Ybor City Sunday Market",
+        "feedback": "User skipped this. Reason: As a cricket lover we had cricket final match to watch India Vs New Zealand",
+        "rating": "\ud83d\udc4e"
     }
 ]
