@@ -90,7 +90,27 @@ def inject_css():
         div[data-testid="stChatMessage"] code { background:#f1f5f9 !important; color:#4f46e5 !important; }
 
         .stAlert { border-radius:var(--r-sm) !important; }
-        div[data-testid="stSpinner"]>div { border-top-color:#4f46e5 !important; }
+        /* Spinner — larger, centered, branded */
+        div[data-testid="stSpinner"] {
+            display:flex; align-items:center; justify-content:center;
+            padding:18px 0 !important;
+        }
+        div[data-testid="stSpinner"] > div {
+            border-top-color:#4f46e5 !important;
+            width:32px !important; height:32px !important;
+            border-width:3px !important;
+        }
+        div[data-testid="stSpinner"] p {
+            color:#4f46e5 !important; font-weight:700 !important;
+            font-size:15px !important; margin-left:12px !important;
+        }
+        /* Status widget */
+        div[data-testid="stStatus"] {
+            border-radius: var(--r-md) !important;
+            border: 1px solid #c7d2fe !important;
+            background: #eef2ff !important;
+        }
+
         .streamlit-expanderHeader {
             background:#f8fafc !important; color:#0f172a !important;
             border-radius:var(--r-sm) !important; font-weight:700 !important;
@@ -227,48 +247,6 @@ def inject_css():
             background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0;
         }
         .coo-status-badge.offline { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
-
-        /* ════════════════════════════════════════════════════════
-           TOP NAV BAR  (shows on mobile; hidden on desktop via sibling trick)
-           Approach: inject a landmark span just before the columns.
-           CSS targets: span#coo-topnav-start ~ sibling = the columns block.
-           This is the ONLY CSS approach that works in Streamlit's flat DOM.
-           ════════════════════════════════════════════════════════ */
-
-        /* Desktop: hide the ENTIRE container that holds the topnav */
-        div.coo-topnav-hide { display:none !important; }
-        @media(max-width:768px) {
-            div.coo-topnav-hide { display:block !important; }
-        }
-        /* The actual topnav row */
-        .coo-topnav-row {
-            position:sticky; top:0; z-index:9999;
-            background:rgba(255,255,255,.97);
-            backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
-            border-bottom:1px solid #e8edf4;
-            box-shadow:0 2px 10px rgba(15,23,42,.07);
-            padding:8px 8px 6px;
-            margin:-14px -14px 14px;
-        }
-        .coo-topnav-row .stButton>button {
-            height:42px !important; font-size:11px !important;
-            font-weight:700 !important; padding:0 2px !important;
-            border-radius:10px !important; background:#f8fafc !important;
-            color:#64748b !important; border:1.5px solid #e8edf4 !important;
-            display:flex !important; flex-direction:column !important;
-            align-items:center !important; justify-content:center !important;
-            gap:1px !important; line-height:1.1 !important;
-            box-shadow:none !important; white-space:pre-line !important;
-        }
-        .coo-topnav-row .stButton>button:hover {
-            background:#eef2ff !important; border-color:#c7d2fe !important;
-            color:#4338ca !important;
-        }
-        .coo-topnav-row button[data-testid="baseButton-primary"] {
-            background:#4f46e5 !important; color:#fff !important;
-            border-color:#4f46e5 !important;
-            box-shadow:0 2px 8px rgba(79,70,229,.30) !important;
-        }
 
         /* ════════════════════════════════════════════════════════
            HEADER + GREETING
@@ -549,6 +527,62 @@ def inject_css():
         }
 
         /* ════════════════════════════════════════════════════════
+           CAMERA WIDGET  — make it large, usable, and clear
+           ════════════════════════════════════════════════════════ */
+        /* Outer wrapper Streamlit adds */
+        div[data-testid="stCameraInput"] {
+            width: 100% !important;
+        }
+        /* The video/canvas frame itself */
+        div[data-testid="stCameraInput"] video,
+        div[data-testid="stCameraInput"] canvas,
+        div[data-testid="stCameraInput"] img {
+            width:  100% !important;
+            max-width: 100% !important;
+            height: auto !important;
+            min-height: 280px !important;
+            border-radius: var(--r-lg) !important;
+            border: 2px solid #c7d2fe !important;
+            background: #0f172a !important;
+            display: block !important;
+        }
+        /* The inner container Streamlit wraps the video in */
+        div[data-testid="stCameraInput"] > div:first-child {
+            width: 100% !important;
+            border-radius: var(--r-lg) !important;
+            overflow: hidden !important;
+        }
+        /* Capture / Retake button row */
+        div[data-testid="stCameraInputButton"] {
+            width: 100% !important;
+            margin-top: 10px !important;
+        }
+        div[data-testid="stCameraInputButton"] button {
+            width: 100% !important;
+            height: 48px !important;
+            font-size: 15px !important;
+            font-weight: 800 !important;
+            border-radius: var(--r-md) !important;
+            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%) !important;
+            color: #ffffff !important;
+            border: none !important;
+            box-shadow: 0 4px 14px rgba(79,70,229,0.35) !important;
+            cursor: pointer !important;
+        }
+        div[data-testid="stCameraInputButton"] button:hover {
+            background: linear-gradient(135deg, #4338ca 0%, #4f46e5 100%) !important;
+        }
+        /* Mobile: camera takes full width */
+        @media(max-width:768px) {
+            div[data-testid="stCameraInput"] video,
+            div[data-testid="stCameraInput"] canvas,
+            div[data-testid="stCameraInput"] img {
+                min-height: 220px !important;
+            }
+        }
+
+
+        /* ════════════════════════════════════════════════════════
            FAB — Execute floating button (mobile only)
            ════════════════════════════════════════════════════════ */
         .coo-fab {
@@ -565,60 +599,23 @@ def inject_css():
         }
         .coo-fab:active { transform:scale(.86); }
         @media(max-width:768px){ .coo-fab{ display:flex !important; } }
-        /* ════════════════════════════════════════════════════════
-           TOP NAV ROW  — st.container() with sentinel span
-           CSS :has() targets the container's stVerticalBlock.
-           Uses > stMarkdownContainer child so it ONLY matches the
-           inner container, not outer ancestor blocks.
-           ════════════════════════════════════════════════════════ */
-        /* Desktop: hide */
-        div[data-testid="stVerticalBlock"]:has(
-            > div[data-testid="stMarkdownContainer"] span.coo-topnav-marker
-        ) { display: none !important; }
-
-        /* Mobile: show as sticky top bar */
-        @media(max-width:768px) {
-            div[data-testid="stVerticalBlock"]:has(
-                > div[data-testid="stMarkdownContainer"] span.coo-topnav-marker
-            ) {
-                display: block !important;
-                position: sticky; top: 0; z-index: 9998;
-                background: rgba(255,255,255,0.97) !important;
-                backdrop-filter: blur(10px);
-                -webkit-backdrop-filter: blur(10px);
-                border-bottom: 1px solid #e2e8f0;
-                box-shadow: 0 2px 8px rgba(15,23,42,0.07);
-                padding: 6px 8px !important;
-                margin: -8px -12px 12px -12px !important;
-            }
-            /* Compact button style inside topnav */
-            div[data-testid="stVerticalBlock"]:has(
-                > div[data-testid="stMarkdownContainer"] span.coo-topnav-marker
-            ) .stButton > button {
-                height: 38px !important;
-                font-size: 12px !important;
-                font-weight: 700 !important;
-                padding: 0 4px !important;
-                border-radius: 10px !important;
-                border: 1.5px solid #e2e8f0 !important;
-                background: #f8fafc !important;
-                color: #64748b !important;
-                box-shadow: none !important;
-            }
-            div[data-testid="stVerticalBlock"]:has(
-                > div[data-testid="stMarkdownContainer"] span.coo-topnav-marker
-            ) button[data-testid="baseButton-primary"] {
-                background: #4f46e5 !important;
-                color: #ffffff !important;
-                border-color: #4f46e5 !important;
-                box-shadow: 0 2px 6px rgba(79,70,229,0.28) !important;
-            }
-            /* Hide the sentinel span itself */
-            span.coo-topnav-marker { display: none !important; }
-        }
-
         </style>
-        """,
+        <script>
+        /* One-shot browser timezone detection.
+           Reads Intl API, appends ?tz=<zone> to URL once so Streamlit
+           can pick it up via st.query_params["tz"] on next render. */
+        (function() {
+            try {
+                var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (!tz) return;
+                var u = new URL(window.location.href);
+                if (!u.searchParams.get('tz')) {
+                    u.searchParams.set('tz', tz);
+                    window.location.replace(u.toString());
+                }
+            } catch(e) {}
+        })();
+        </script>""",
         unsafe_allow_html=True,
     )
     
@@ -1004,8 +1001,9 @@ def render_command_center(
 
             with yes_col:
                 if st.button("Yes", key="coo_checkin_yes", type="primary", use_container_width=True):
-                    if callable(on_checkin_yes):
-                        on_checkin_yes()
+                    with st.spinner("✅ Marking complete…"):
+                        if callable(on_checkin_yes):
+                            on_checkin_yes()
                     st.session_state["checkin_feedback_open"] = False
                     st.session_state["clear_checkin_feedback_text"] = True
                     st.rerun()
@@ -1075,7 +1073,17 @@ def render_command_center(
 
         # ── Loading spinner — shown while AI processes ──
         if _exec_clicked:
-            with st.spinner("🤔 AI is thinking…"):
+            has_image = bool(st.session_state.get("cam_input"))
+            has_text  = bool((st.session_state.get("plan_text") or "").strip())
+            if has_image and has_text:
+                _msg = "🔍 Reading image and processing your plan…"
+            elif has_image:
+                _msg = "🔍 Scanning image with AI…"
+            elif has_text:
+                _msg = "🤔 AI is thinking…"
+            else:
+                _msg = "⚙️ Processing…"
+            with st.spinner(_msg):
                 if callable(submit_callback):
                     submit_callback()
             st.rerun()
@@ -1083,17 +1091,38 @@ def render_command_center(
         # Camera widget — shown when Scan toggled on
         if st.session_state.get("show_camera"):
             st.markdown(
-                "<div style='margin-top:8px; font-size:12px; font-weight:700;"
-                " color:var(--text-muted);'>📷 Point camera at text and capture:</div>",
+                """
+                <div style='
+                    background:#eff6ff;
+                    border:1.5px solid #bfdbfe;
+                    border-left:4px solid #3b82f6;
+                    border-radius:12px;
+                    padding:12px 14px;
+                    margin:12px 0 8px;
+                '>
+                  <div style='font-weight:900;color:#1e40af;font-size:14px;margin-bottom:4px;'>
+                    📷 Camera Scan
+                  </div>
+                  <div style='font-size:13px;color:#3b82f6;font-weight:600;line-height:1.5;'>
+                    1 · Allow camera access if prompted<br>
+                    2 · Point at the text you want to scan<br>
+                    3 · Click <b>Take photo</b> below the viewfinder<br>
+                    4 · Hit <b>🚀 Execute</b> to process the image
+                  </div>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
+
             cam_img = st.camera_input(
-                "Capture",
+                "📷 Point at text then click Take photo",
                 key="cam_input",
-                label_visibility="collapsed",
             )
+
             if cam_img:
-                st.success("✅ Image captured — click 🚀 Execute to process.")
+                st.success("✅ Photo captured! Click **🚀 Execute** to process it.")
+                # Show thumbnail so user can confirm what was captured
+                st.image(cam_img, caption="Captured — ready to process", use_container_width=True)
 
         # ===== Conversation =====
         st.markdown("<div class='coo-hero-divider'></div>", unsafe_allow_html=True)
@@ -1305,33 +1334,17 @@ def render_right_column(drafts, calendar, on_add, on_reject):
 
 
 # ------------------------------------------------------------
-# MOBILE BOTTOM NAV + FAB
-# Approach: real Streamlit buttons styled as a fixed bottom bar.
-# Wrapped in a CSS-display:none container on desktop, shown on mobile.
-# This is 100% reliable — no JS sidebar-button hunting needed.
-# ------------------------------------------------------------
-# ------------------------------------------------------------
 # MOBILE BOTTOM NAV  +  FAB
-# HTML nav bar (CSS: shown only ≤768px) + hidden Streamlit trigger buttons.
-# JS matches each hidden button by exact innerText and fires .click().
-# Desktop: bar is CSS-hidden; sidebar handles all navigation.
-# Mobile:  bar shows at bottom; hamburger still usable for full sidebar.
-# ------------------------------------------------------------
-# ------------------------------------------------------------
-# MOBILE BOTTOM NAV + FAB  (HTML only — zero Streamlit widgets)
-# Clicking a tab → JS finds the real topnav button by innerText
-# (rendered by render_topnav() in main content) → fires .click()
-# Desktop: both the bottom nav and topnav are CSS-hidden.
-# Mobile: topnav shows sticky at top; bottom nav shows at bottom.
+# Pure HTML/CSS — zero Streamlit buttons. No DOM manipulation.
+# Navigation: each tab sets window.location.href = "?page=X"
+# app.py reads ?page= query param and updates active_page.
+# This is the ONLY reliable mobile nav approach in Streamlit.
 # ------------------------------------------------------------
 def render_mobile_nav():
-    """Renders HTML bottom nav bar + FAB. No Streamlit widgets — avoids
-    the DOM-sibling problem where st.button() can't be hidden via
-    a preceding st.markdown() div wrapper."""
+    """Fixed bottom nav + Execute FAB. CSS shows at ≤768px only."""
     import streamlit as st
 
     active = st.session_state.get("active_page", "coo")
-
     tabs = [
         ("coo",       "🏠", "Home"),
         ("dashboard", "📊", "Dash"),
@@ -1343,82 +1356,37 @@ def render_mobile_nav():
     tab_parts = []
     for page_id, icon, label in tabs:
         active_cls = " active" if active == page_id else ""
-        full_label = f"{icon} {label}"
-        # JS: find the matching topnav button by its label text and click it
-        js = (
-            "(function(){"
-            "var bb=document.querySelectorAll('button[data-testid]');"
-            "for(var i=0;i<bb.length;i++){"
-            f"if(bb[i].innerText&&bb[i].innerText.trim()==='{full_label}')"
-            "{bb[i].click();return;}"
-            "}})()"
+        # Preserve ?tz= param while switching page
+        nav_js = (
+            f"(function(){{"
+            f"var u=new URL(window.location.href);"
+            f"u.searchParams.set('page','{page_id}');"
+            f"window.location.href=u.toString();"
+            f"}})()"
         )
         tab_parts.append(
-            f'<button class="coo-mob-tab{active_cls}" onclick="{js}" '
+            f'<button class="coo-mob-tab{active_cls}" onclick="{nav_js}" '
             f'aria-label="{label}">'
             f'<span class="coo-mob-icon">{icon}</span>'
             f'<span class="coo-mob-label">{label}</span>'
             f'</button>'
         )
 
+    # FAB: click real Execute button in main content by text match
     fab_js = (
         "(function(){"
         "var bb=document.querySelectorAll('button[data-testid]');"
         "for(var i=0;i<bb.length;i++){"
         "if(bb[i].innerText&&bb[i].innerText.trim().includes('Execute'))"
         "{bb[i].click();return;}"
-        "}})();"
+        "}})()"
     )
 
     st.markdown(
         '<nav class="coo-mobile-nav" id="coo-mobile-nav" role="navigation">'
-        + "".join(tab_parts)
-        + '</nav>'
-        + f'<button class="coo-fab" id="coo-fab" onclick="{fab_js}" '
-          f'title="Execute" aria-label="Execute">🚀</button>',
+        + "".join(tab_parts) +
+        '</nav>'
+        f'<button class="coo-fab" id="coo-fab" onclick="{fab_js}" '
+        f'title="Execute" aria-label="Execute">🚀</button>',
         unsafe_allow_html=True,
     )
-
-
-# ------------------------------------------------------------
-# MOBILE TOP NAV ROW  — st.container() + CSS :has() sentinel
-# Rendered in main content; CSS shows only at ≤768px.
-# JS from the HTML bottom bar clicks these real Streamlit buttons.
-# ------------------------------------------------------------
-def render_topnav():
-    """
-    Renders 5 nav buttons inside a st.container().
-    A sentinel <span class="coo-topnav-marker"> is injected first;
-    CSS :has(> div[data-testid="stMarkdownContainer"] span.coo-topnav-marker)
-    targets exactly this container (not outer ancestor blocks) and hides it
-    on desktop, shows it as a sticky bar on mobile.
-    """
-    import streamlit as st
-
-    active = st.session_state.get("active_page", "coo")
-    tabs = [
-        ("coo",       "🏠 Home"),
-        ("dashboard", "📊 Dash"),
-        ("calendar",  "🗓️ Cal"),
-        ("memory",    "🧠 Brain"),
-        ("settings",  "⚙️ More"),
-    ]
-
-    with st.container():
-        # Sentinel — the CSS :has() selector finds this to identify
-        # the correct stVerticalBlock to show/hide
-        st.markdown(
-            '<span class="coo-topnav-marker" style="display:none;"></span>',
-            unsafe_allow_html=True,
-        )
-        cols = st.columns(len(tabs), gap="small")
-        for (page_id, label), col in zip(tabs, cols):
-            with col:
-                if st.button(
-                    label,
-                    key=f"_topnav_{page_id}",
-                    type="primary" if active == page_id else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state.active_page = page_id
-                    st.rerun()

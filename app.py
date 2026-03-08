@@ -6,7 +6,6 @@ import time
 from src.ui import (
     inject_css,
     render_mobile_nav,
-    render_topnav,
     render_sidebar,
     render_metrics,
     render_command_center,
@@ -206,10 +205,11 @@ if not st.session_state.get("authenticated"):
     st.stop()
 
 # -----------------------
-# CALENDAR AUTO-REFRESH (light touch)
+# CALENDAR AUTO-REFRESH (with loading indicator)
 # -----------------------
 if st.session_state.get("user_email") and st.session_state.get("calendar_events") is None:
-    refresh_calendar()
+    with st.spinner("📅 Loading your calendar…"):
+        refresh_calendar()
 
 # -----------------------
 # SIDEBAR
@@ -231,10 +231,22 @@ render_sidebar(
 # All other pages → existing metrics + two-column COO layout (unchanged)
 # -----------------------
 from src.flow import checkin_yes_learning, checkin_no_with_feedback  # noqa: F401
+
+# ── Read ?page= query param (set by mobile bottom nav) ──
+_qp_page = (st.query_params.get("page") or "").strip().lower()
+if _qp_page in ("coo", "dashboard", "calendar", "memory", "settings"):
+    st.session_state.active_page = _qp_page
+
+# ── Read ?tz= query param (set once by browser TZ detection JS) ──
+_qp_tz = (st.query_params.get("tz") or "").strip()
+if _qp_tz and not st.session_state.get("user_tz"):
+    st.session_state.user_tz = _qp_tz
+    # Re-run calendar refresh so events reformat in user TZ
+    st.session_state.calendar_events = None
+
 _active_page = st.session_state.get("active_page", "coo")
 
 if _active_page != "coo":
-    render_topnav()   # mobile-only sticky nav (CSS-hidden on desktop)
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE
     try:
         _pending_missions = 1 if _gpr() else 0
@@ -264,7 +276,6 @@ if _active_page != "coo":
     )
 
 else:
-    render_topnav()   # mobile-only sticky nav (CSS-hidden on desktop)
     kpis = compute_kpis(user_name=st.session_state.get("user_name", "Tushar"))
     checkin_item, checkin_mode = get_checkin_context()
 

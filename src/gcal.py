@@ -323,14 +323,35 @@ def save_token_from_device_flow(user_id: str, token_response: Dict[str, Any]) ->
 # -----------------------
 # PUBLIC API: EVENTS
 # -----------------------
+# User-facing display timezone — set once per session by set_display_tz().
+# Defaults to None which falls back to dt.astimezone() (server local TZ on Cloud).
+_DISPLAY_TZ: str | None = None
+
+def set_display_tz(tz_name: str) -> None:
+    """Called by flow.refresh_calendar() with the browser-detected timezone."""
+    global _DISPLAY_TZ
+    if tz_name:
+        _DISPLAY_TZ = tz_name.strip()
+
+
 def format_friendly_date(iso_str: str) -> str:
-    """Converts ISO string to 'Fri, Feb 13 @ 5:00 PM' or 'Fri, Feb 13 (All Day)'."""
+    """Converts ISO string to 'Fri, Feb 13 @ 5:00 PM' or 'Fri, Feb 13 (All Day)'.
+    Uses user's browser timezone if set via set_display_tz(); falls back to server local."""
     try:
         if not iso_str:
             return ""
         if "T" in iso_str:
             dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-            return dt.astimezone().strftime("%a, %b %d @ %I:%M %p")
+            _tz = _DISPLAY_TZ
+            if _tz:
+                try:
+                    from zoneinfo import ZoneInfo
+                except ImportError:
+                    from backports.zoneinfo import ZoneInfo  # type: ignore
+                dt = dt.astimezone(ZoneInfo(_tz))
+            else:
+                dt = dt.astimezone()
+            return dt.strftime("%a, %b %d @ %I:%M %p")
         dt = datetime.strptime(iso_str, "%Y-%m-%d")
         return dt.strftime("%a, %b %d (All Day)")
     except Exception:
@@ -433,43 +454,6 @@ def get_events_range(user_id: str, start_dt: datetime, end_dt: datetime) -> Opti
         return None
 
 
-# -----------------------
-# TIMEZONE HELPERS (BUG-11)
-# -----------------------
-def _get_user_tz_name() -> str:
-    """
-    Returns the canonical IANA timezone name for the user.
-    Reads from Streamlit session_state["user_timezone"] if set,
-    otherwise falls back to America/New_York (Tampa / Eastern).
-    Update user_timezone in session_state to support other timezones.
-    """
-    try:
-        tz = (st.session_state.get("user_timezone") or "").strip()
-        if tz:
-            return tz
-    except Exception:
-        pass
-    return "America/New_York"
-
-
-def _stamp_user_tz(naive_dt: datetime) -> datetime:
-    """
-    Stamp a naive datetime with the user's local timezone (never UTC).
-    BUG-11: Brain outputs naive local times. Stamping as UTC shifts them by 4-5 hours.
-    """
-    tz_name = _get_user_tz_name()
-    try:
-        try:
-            from zoneinfo import ZoneInfo
-            return naive_dt.replace(tzinfo=ZoneInfo(tz_name))
-        except ImportError:
-            import pytz
-            return pytz.timezone(tz_name).localize(naive_dt)
-    except Exception:
-        # Last resort: use system local timezone
-        return naive_dt.astimezone()
-
-
 def add_event_to_calendar(*args, **kwargs) -> Tuple[bool, str, Optional[str]]:
     """
     Backward-compatible add to Google Calendar.
@@ -517,10 +501,7 @@ def add_event_to_calendar(*args, **kwargs) -> Tuple[bool, str, Optional[str]]:
 
             start_dt = datetime.fromisoformat(start_str)
             if start_dt.tzinfo is None:
-                # BUG-11: Brain emits naive local times (e.g. 17:30 = 5:30 PM ET).
-                # Must stamp as user's local timezone — NOT UTC — or Google Calendar
-                # receives the wrong hour (e.g. 17:30 UTC -> displayed as 1:30 PM EDT).
-                start_dt = _stamp_user_tz(start_dt)
+                start_dt = start_dt.replace(tzinfo=timezone.utc).astimezone()
 
             end_dt = (
                 datetime.fromisoformat(event.get("end_time"))
@@ -528,16 +509,14 @@ def add_event_to_calendar(*args, **kwargs) -> Tuple[bool, str, Optional[str]]:
                 else start_dt + timedelta(hours=1)
             )
             if end_dt.tzinfo is None:
-                end_dt = _stamp_user_tz(end_dt)
+                end_dt = end_dt.replace(tzinfo=start_dt.tzinfo)
 
-            # Always send the canonical user timezone to Google Calendar
-            _user_tz_name = _get_user_tz_name()
             body = {
                 "summary": event.get("title", "New Event"),
                 "location": event.get("location", ""),
                 "description": f"{event.get('description', '')}\n\n💡 {event.get('pre_prep', '')}".strip(),
-                "start": {"dateTime": start_dt.isoformat(), "timeZone": _user_tz_name},
-                "end": {"dateTime": end_dt.isoformat(), "timeZone": _user_tz_name},
+                "start": {"dateTime": start_dt.isoformat(), "timeZone": "America/New_York"},
+                "end": {"dateTime": end_dt.isoformat(), "timeZone": "America/New_York"},
             }
 
             created = service.events().insert(calendarId="primary", body=body).execute()
@@ -554,11 +533,7 @@ def add_event_to_calendar(*args, **kwargs) -> Tuple[bool, str, Optional[str]]:
 
     try:
         dt_start = datetime.fromisoformat(event.get("start_time"))
-        if dt_start.tzinfo is None:
-            dt_start = _stamp_user_tz(dt_start)
         dt_end = datetime.fromisoformat(event.get("end_time")) if event.get("end_time") else dt_start + timedelta(hours=1)
-        if dt_end.tzinfo is None:
-            dt_end = _stamp_user_tz(dt_end)
         dates = f"{dt_start.strftime('%Y%m%dT%H%M%S')}/{dt_end.strftime('%Y%m%dT%H%M%S')}"
     except Exception:
         return False, "https://calendar.google.com/", None
