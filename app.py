@@ -322,7 +322,10 @@ if _active_page != "coo":
     )
 
 else:
-    kpis = compute_kpis(user_name=st.session_state.get("user_name", "Tushar"))
+    # Derive first name from email when no explicit user_name is stored
+    _ue = (st.session_state.get("user_email") or "").split("@")[0].replace(".", " ").replace("_", " ").split()
+    _first = _ue[0].capitalize() if _ue else "there"
+    kpis = compute_kpis(user_name=st.session_state.get("user_name") or _first)
     checkin_item, checkin_mode = get_checkin_context()
 
     render_metrics(kpis)

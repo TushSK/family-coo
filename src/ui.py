@@ -613,7 +613,7 @@ def inject_css():
 # ------------------------------------------------------------
 # SIDEBAR
 # ------------------------------------------------------------
-def _initials_from_email_or_name(email: str, fallback_name: str = "Tushar"):
+def _initials_from_email_or_name(email: str, fallback_name: str = "User"):
     email = (email or "").strip()
     if email and "@" in email:
         part = email.split("@", 1)[0]
@@ -632,7 +632,13 @@ def render_sidebar(status, count, on_start, on_clear, on_complete):
     import streamlit as st
 
     email        = (st.session_state.get("user_email") or "").strip()
-    display_name = (st.session_state.get("user_name") or "Tushar Khandare").strip()
+    # Derive display name from email if no explicit user_name is set
+    _email_raw = (st.session_state.get("user_email") or "").strip().lower()
+    _derived_name = ""
+    if _email_raw and "@" in _email_raw:
+        _parts = _email_raw.split("@")[0].replace(".", " ").replace("_", " ").split()
+        _derived_name = " ".join(p.capitalize() for p in _parts if p)
+    display_name = (st.session_state.get("user_name") or _derived_name or "User").strip()
     role_line    = st.session_state.get("user_role_line") or "Admin • Tampa, FL"
     initials     = _initials_from_email_or_name(email=email, fallback_name=display_name)
     is_online    = "online" in (status or "").lower()
