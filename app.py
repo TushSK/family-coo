@@ -172,23 +172,38 @@ if not st.session_state.get("authenticated"):
                 st.session_state["login_msg"] = "Enter your PIN."
                 st.rerun()
 
-            # ✅ PIN config (simple + fool-proof)
-            # Supported:
-            # 1) st.secrets["auth"]["pin"] = "1234" (single PIN for all)
-            # 2) st.secrets["auth"]["pins"][email] = "1234" (per-user PIN)
-            auth = st.secrets.get("auth", {}) if hasattr(st, "secrets") else {}
-            global_pin = str(auth.get("pin", "") or "").strip()
-            pins_map = auth.get("pins", {}) or {}
+            # ✅ PIN config — read with direct key access (Streamlit AttrDict
+            # does not always honour .get() on nested TOML tables reliably)
+            try:
+                auth = st.secrets["auth"]
+            except Exception:
+                auth = {}
 
-            expected = ""
-            if isinstance(pins_map, dict):
-                expected = str(pins_map.get(email_norm, "") or "").strip()
+            # global single PIN
+            try:
+                global_pin = str(auth["pin"] or "").strip()
+            except Exception:
+                global_pin = ""
 
-            if (expected and pin_norm != expected) or (not expected and global_pin and pin_norm != global_pin) or (not expected and not global_pin):
-                if not expected and not global_pin:
-                    st.session_state["login_msg"] = "PIN auth is not configured. Add [auth] pin/pins in secrets.toml."
-                else:
-                    st.session_state["login_msg"] = "Invalid email or PIN."
+            # per-user PIN map  ([auth.pins] table in secrets.toml)
+            try:
+                _pins_section = auth["pins"]
+                try:
+                    expected = str(_pins_section[email_norm] or "").strip()
+                except Exception:
+                    expected = ""
+            except Exception:
+                expected = ""
+
+            # Determine correct PIN for this user
+            correct_pin = expected or global_pin  # per-user takes priority
+
+            if not correct_pin:
+                st.session_state["login_msg"] = "⚠️ No PIN found for this email. Check secrets.toml [auth.pins]."
+                st.rerun()
+
+            if pin_norm != correct_pin:
+                st.session_state["login_msg"] = "Invalid email or PIN."
                 st.rerun()
 
             # ✅ Login success: create app session + persist sid

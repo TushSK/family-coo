@@ -1,0 +1,272 @@
+[
+    {
+        "mission": "daughter judo classes every Monday and Tuesday at 5:30pm.. almost 30min drive from here",
+        "feedback": "",
+        "rating": "\ud83d\udc4d",
+        "timestamp": "Just now"
+    },
+    {
+        "mission": "Should i reshedule my daughter chess classes or the Judo classes on every Monday and Tuesday?",
+        "feedback": "",
+        "rating": "\ud83d\udc4d",
+        "timestamp": "Just now"
+    },
+    {
+        "mission": "Have a pediatrician appointment on Feb 26th at 3:30 pm",
+        "feedback": "",
+        "rating": "\ud83d\udc4d",
+        "timestamp": "Just now"
+    },
+    {
+        "mission": "help me best time to visit Thai temple",
+        "feedback": "If there is a general question asked about. Check best details online and suggest top2 options intelligently to perform the activity. Also check for my schedule. Preferably check around Tampa/ Hillsborough region ",
+        "rating": "\ud83d\udc4e",
+        "timestamp": "Just now"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Last Plan",
+        "feedback": "",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "add the date on the calendar schedule",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "When i click on the Map, it should list the places related to the suggestion of the plan activity asked for. ",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "The time suggested overlaps with an already scheduled activity. Check my calendar first and then suggest",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "If its gym the address is EOS fitness N Dale Mabry hwy",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "You need to check last 3 event to see if anything is pending r completed",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Plan",
+        "feedback": "it should check the context and then decide the location to be set on the map.",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-16",
+        "mission": "Test Missed Task",
+        "feedback": "User skipped this. Reason: Missed. Rescheduled. Note: Missed",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-16",
+        "mission": "Test Missed Task (Rescheduled) (Rescheduled)",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-16",
+        "mission": "Test Missed Task (Rescheduled) (Rescheduled)",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-17",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-17",
+        "mission": "Test Missed Task (Rescheduled)",
+        "feedback": "User skipped this. Reason: Missed. Deleted. Note: it was a test event created in calendar ignore",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-18",
+        "mission": "Review the Gym trainer contract. Need to give notice 30days prior",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-20",
+        "mission": "Outing",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-20",
+        "mission": "Outing",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d"
+    },
+    {
+        "timestamp": "2026-02-21",
+        "mission": "Family Outing: Build Your Own Hedgehog Magnet",
+        "feedback": "User skipped this. Reason: cancelled the plan for something else",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "Family Outing: Build Your Own Hedgehog Magnet",
+        "feedback": "cancelled the plan for something else",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-02-23",
+        "user_id": "tushar@...",
+        "type": "memory_writeback",
+        "kind": "preference",
+        "key": "outing_style",
+        "value": "family fun",
+        "confidence": 0.82
+    },
+    {
+        "timestamp": "2026-02-23",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-23",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-23",
+        "mission": "Test Missed Task",
+        "feedback": "User skipped this. Reason: its a test meeting ignore it",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "TrainBrain: Bad Response",
+        "feedback": "I prefer outdoor activities and less travel, visit to some natural places",
+        "rating": "\ud83d\udc4e",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "TrainBrain: Bad Response",
+        "feedback": "I prefer outdoor activities and less travel, visit to some natural places",
+        "rating": "\ud83d\udc4e",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-24",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-24",
+        "mission": "Judo class",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "Manual",
+        "mission": "TrainBrain: Bad Response",
+        "feedback": "Next time provide the timing of the activities along with the location. Do not ask both separately",
+        "rating": "\ud83d\udc4e",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-02-27",
+        "mission": "Drishti Appointment with Doctor",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-02",
+        "mission": "Florida Aquarium Visit",
+        "feedback": "User skipped this. Reason: visited Buddhist temple nearby instead",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-03-02",
+        "mission": "Florida Aquarium Visit",
+        "feedback": "User skipped this. Reason: visited Buddhist temple nearby instead",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-03-03",
+        "mission": "Blood Work",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-03",
+        "mission": "Blood Work",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-04",
+        "mission": "Doctor Visit",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-04",
+        "mission": "Doctor Visit",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-06",
+        "mission": "Family Play Time",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-07",
+        "mission": "Return Library Books",
+        "feedback": "User skipped this. Reason: got busy.",
+        "rating": "\ud83d\udc4e"
+    },
+    {
+        "timestamp": "2026-03-07",
+        "mission": "X Ray Appointment",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-07",
+        "mission": "Lab Work \u2013 Daughter at Quest Diagnostics",
+        "feedback": "User completed this. Reason: Completed",
+        "rating": "\ud83d\udc4d",
+        "user_id": "tushar.khandare@gmail.com"
+    },
+    {
+        "timestamp": "2026-03-08",
+        "mission": "Ybor City Sunday Market",
+        "feedback": "User skipped this. Reason: As a cricket lover we had cricket final match to watch India Vs New Zealand",
+        "rating": "\ud83d\udc4e"
+    }
+]
