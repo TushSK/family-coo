@@ -135,6 +135,17 @@ def get_calendar_service(user_id: Optional[str] = None):
 
     if user_id:
         token_dict = _load_token_from_supabase(user_id)
+        # Fallback: per-user local file (testers without Supabase)
+        if not token_dict:
+            try:
+                import re
+                safe = re.sub(r"[^a-zA-Z0-9_]", "_", user_id.lower())
+                local_path = os.path.join("memory", "users", safe, "gcal_token.json")
+                if os.path.exists(local_path):
+                    with open(local_path, "r", encoding="utf-8") as _f:
+                        token_dict = json.load(_f)
+            except Exception:
+                pass
 
     if not token_dict:
         token_dict = _load_token_from_local()
@@ -292,7 +303,9 @@ def extract_email_from_token_response(token_response: Dict[str, Any]) -> Optiona
 
 def save_token_from_device_flow(user_id: str, token_response: Dict[str, Any]) -> Tuple[bool, str]:
     """
-    Persists device-flow token response to Supabase under user_id.
+    Persists device-flow token response.
+    Tries Supabase first; falls back to per-user local file so testers work
+    even without Supabase configured.
     Returns (ok, message)
     """
     if not user_id:
@@ -314,10 +327,32 @@ def save_token_from_device_flow(user_id: str, token_response: Dict[str, Any]) ->
         "scopes": SCOPES,
     }
 
+    # Try Supabase first
     ok = _save_token_to_supabase(user_id, token_dict)
     if ok:
         return True, "✅ Calendar connected!"
-    return False, "Could not save token to Supabase."
+
+    # Fallback: save to per-user local file (works for testers without Supabase)
+    _save_token_to_local_for_user(user_id, token_dict)
+    return True, "✅ Calendar connected! (local storage)"
+
+
+def _local_token_path(user_id: str) -> str:
+    """Returns per-user token file path."""
+    import re
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", (user_id or "default").lower())
+    user_dir = os.path.join("memory", "users", safe)
+    os.makedirs(user_dir, exist_ok=True)
+    return os.path.join(user_dir, "gcal_token.json")
+
+
+def _save_token_to_local_for_user(user_id: str, token_dict: dict) -> None:
+    try:
+        path = _local_token_path(user_id)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(token_dict, f)
+    except Exception:
+        pass
 
 
 # -----------------------

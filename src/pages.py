@@ -1021,66 +1021,1251 @@ def _render_dashboard(
 # ─────────────────────────────────────────────────────────────
 # CALENDAR VIEW PAGE  (placeholder — future)
 # ─────────────────────────────────────────────────────────────
-def _render_calendar(calendar_events=None, **_):
+def _render_calendar(calendar_events=None, pending_missions=0, location="", user_email="", **_):
     import streamlit as st
-    st.markdown("### 🗓️ Calendar View")
-    st.info("Full calendar view coming soon. Your events are managed via Google Calendar.")
+    from datetime import date, datetime, timedelta
+    from src.flow import add_to_calendar, reject_draft
+
     events = calendar_events or []
-    if events:
-        for ev in events[:20]:
-            start = str(ev.get("start_raw") or ev.get("start_time") or "")[:16].replace("T", " ")
-            title = ev.get("title") or "Event"
-            loc   = ev.get("location") or ""
+    today  = date.today()
+
+    # ── helpers ────────────────────────────────────────────────
+    def _dt(ev):
+        raw = str(ev.get("start_raw") or ev.get("start_time") or "")
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone()
+        except Exception:
+            return None
+
+    def _end_dt(ev):
+        raw = str(ev.get("end_raw") or ev.get("end_time") or "")
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone()
+        except Exception:
+            start = _dt(ev)
+            return start + timedelta(hours=1) if start else None
+
+    def _fmt_hour(dt) -> str:
+        """Cross-platform time format. Strips leading zero."""
+        if not dt:
+            return ""
+        return dt.strftime("%I:%M %p").lstrip("0") or "12:00 AM"
+
+    def _hm(ev):
+        return _fmt_hour(_dt(ev)) or "—"
+
+    def _hm_end(ev):
+        return _fmt_hour(_end_dt(ev))
+
+    def _ev_date(ev) -> date:
+        dt = _dt(ev)
+        return dt.date() if dt else today
+
+    def _is_allday(ev):
+        raw = str(ev.get("start_raw") or ev.get("start_time") or "")
+        return "T" not in raw
+
+    # ── compute bandwidth metrics ───────────────────────────────
+    week_start = today - timedelta(days=today.weekday())        # Monday
+    week_days  = [week_start + timedelta(days=i) for i in range(7)]
+
+    week_evs = [e for e in events if _ev_date(e) in week_days]
+
+    # busiest day
+    day_counts: dict = {}
+    for e in week_evs:
+        d = _ev_date(e)
+        day_counts[d] = day_counts.get(d, 0) + 1
+    busiest_day = max(day_counts, key=lambda d: day_counts[d]) if day_counts else None
+    busiest_label = busiest_day.strftime("%A") if busiest_day else "—"
+    busiest_sub   = f"{day_counts[busiest_day]} events" if busiest_day else ""
+
+    # free evenings (no events 5 PM-9 PM)
+    free_evenings = []
+    for d in week_days:
+        eve_evs = [
+            e for e in week_evs
+            if _ev_date(e) == d and not _is_allday(e) and (
+                (dt := _dt(e)) and dt.hour >= 17 and dt.hour < 21
+            )
+        ]
+        if not eve_evs:
+            free_evenings.append(d)
+    free_ev_labels = [d.strftime("%a") for d in free_evenings[:3]]
+
+    # pending drafts
+    drafts = st.session_state.get("pending_events") or []
+    ndrafts = len(drafts)
+
+    # conflict detection
+    def _conflicts(evs):
+        """Return list of (ev_a, ev_b) pairs that overlap."""
+        pairs = []
+        timed = [(e, _dt(e), _end_dt(e)) for e in evs if _dt(e)]
+        timed.sort(key=lambda x: x[1])
+        for i in range(len(timed)):
+            for j in range(i + 1, len(timed)):
+                a_start, a_end = timed[i][1], timed[i][2]
+                b_start, b_end = timed[j][1], timed[j][2]
+                if a_end and b_start and a_end > b_start:
+                    pairs.append((timed[i][0], timed[j][0]))
+        return pairs
+
+    all_conflicts = _conflicts(week_evs)
+
+    # ── CSS ───────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    /* Calendar page tokens */
+    .cal-page { font-family: Inter, system-ui, sans-serif; }
+
+    /* Bandwidth KPI row */
+    .cal-kpi-grid {
+        display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:14px 0 20px;
+    }
+    @media(max-width:700px){ .cal-kpi-grid{ grid-template-columns:repeat(2,1fr); } }
+    .cal-kpi {
+        background:var(--card-bg); border:1px solid var(--border-subtle);
+        border-radius:14px; padding:16px 18px;
+        box-shadow:var(--sh-sm);
+    }
+    .cal-kpi-label {
+        font-size:.68rem; font-weight:800; color:var(--muted);
+        text-transform:uppercase; letter-spacing:.07em; margin-bottom:6px;
+    }
+    .cal-kpi-value {
+        font-size:1.9rem; font-weight:900; color:var(--text);
+        letter-spacing:-.03em; line-height:1;
+    }
+    .cal-kpi-sub {
+        margin-top:6px; font-size:.75rem; font-weight:700;
+        display:inline-flex; align-items:center; gap:4px;
+        padding:2px 7px; border-radius:6px;
+    }
+    .cal-kpi-sub.green  { background:#dcfce7; color:#15803d; }
+    .cal-kpi-sub.amber  { background:#fef9c3; color:#92400e; }
+    .cal-kpi-sub.red    { background:#fee2e2; color:#991b1b; }
+    .cal-kpi-sub.blue   { background:#dbeafe; color:#1e40af; }
+    [data-theme="dark"] .cal-kpi-sub.green  { background:#14532d; color:#86efac; }
+    [data-theme="dark"] .cal-kpi-sub.amber  { background:#451a03; color:#fcd34d; }
+    [data-theme="dark"] .cal-kpi-sub.red    { background:#450a0a; color:#fca5a5; }
+    [data-theme="dark"] .cal-kpi-sub.blue   { background:#1e3a5f; color:#93c5fd; }
+
+    /* Week grid */
+    .cal-week-grid {
+        display:grid; grid-template-columns:repeat(7,1fr); gap:8px; margin:14px 0 22px;
+    }
+    @media(max-width:700px){ .cal-week-grid{ grid-template-columns:repeat(4,1fr); } }
+    @media(max-width:480px){ .cal-week-grid{ grid-template-columns:repeat(2,1fr); } }
+    .cal-day-col { display:flex; flex-direction:column; gap:5px; }
+    .cal-day-hdr {
+        text-align:center; font-size:.68rem; font-weight:800;
+        color:var(--muted); text-transform:uppercase; letter-spacing:.06em;
+        padding-bottom:4px;
+    }
+    .cal-day-hdr.today { color:#4f46e5; }
+    .cal-chip {
+        border-radius:7px; padding:5px 7px; font-size:.72rem; font-weight:700;
+        line-height:1.3; border-left:3px solid transparent; cursor:default;
+        word-break:break-word;
+    }
+    .cal-chip.blue   { background:#dbeafe; color:#1e40af; border-color:#3b82f6; }
+    .cal-chip.green  { background:#dcfce7; color:#166534; border-color:#22c55e; }
+    .cal-chip.purple { background:#ede9fe; color:#5b21b6; border-color:#8b5cf6; }
+    .cal-chip.amber  { background:#fef9c3; color:#92400e; border-color:#f59e0b; }
+    .cal-chip.rose   { background:#ffe4e6; color:#9f1239; border-color:#f43f5e; }
+    .cal-chip.slate  { background:var(--chip-bg); color:var(--muted); border-color:var(--border); }
+    .cal-chip.free   {
+        background:transparent; color:var(--muted); border:1px dashed var(--border);
+        border-left:3px dashed var(--border); font-style:italic; font-weight:600;
+    }
+    [data-theme="dark"] .cal-chip.blue   { background:#1e3a5f; color:#93c5fd; }
+    [data-theme="dark"] .cal-chip.green  { background:#14532d; color:#86efac; }
+    [data-theme="dark"] .cal-chip.purple { background:#2e1065; color:#c4b5fd; }
+    [data-theme="dark"] .cal-chip.amber  { background:#451a03; color:#fcd34d; }
+    [data-theme="dark"] .cal-chip.rose   { background:#4c0519; color:#fda4af; }
+
+    /* Section headers */
+    .cal-section-hdr {
+        display:flex; align-items:center; gap:9px;
+        font-size:1.1rem; font-weight:900; color:var(--text);
+        letter-spacing:-.02em; margin:6px 0 4px;
+    }
+    .cal-section-sub {
+        font-size:.83rem; color:var(--muted); margin:0 0 14px; font-weight:500;
+    }
+    .cal-divider { height:1px; background:var(--border-subtle); margin:24px 0 18px; }
+
+    /* Proactive planning card */
+    .cal-obs-card {
+        background:var(--card-bg); border:1px solid var(--border-subtle);
+        border-radius:14px; padding:16px 18px; box-shadow:var(--sh-sm);
+        margin-bottom:12px;
+    }
+    .cal-obs-label {
+        font-size:.7rem; font-weight:800; color:#4f46e5;
+        text-transform:uppercase; letter-spacing:.07em; margin-bottom:5px;
+    }
+    .cal-obs-text { font-size:.88rem; color:var(--text); font-weight:500; line-height:1.5; }
+
+    /* Draft / conflict card */
+    .cal-draft-card {
+        background:var(--card-bg); border:1px solid var(--border-subtle);
+        border-radius:14px; padding:16px 18px; box-shadow:var(--sh-sm);
+        margin-bottom:12px;
+    }
+    .cal-draft-title { font-size:.92rem; font-weight:800; color:var(--text); margin-bottom:3px; }
+    .cal-draft-meta  { font-size:.78rem; color:var(--muted); font-weight:500; }
+    .cal-conflict-box {
+        background:#fff1f2; border:1px solid #fecdd3;
+        border-radius:8px; padding:9px 12px; margin:10px 0 12px;
+        font-size:.78rem; color:#9f1239; font-weight:600; line-height:1.4;
+    }
+    [data-theme="dark"] .cal-conflict-box {
+        background:#4c0519; border-color:#9f1239; color:#fda4af;
+    }
+
+    /* Pro tips */
+    .cal-tips-grid {
+        display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:14px;
+    }
+    @media(max-width:700px){ .cal-tips-grid{ grid-template-columns:1fr; } }
+    .cal-tip {
+        background:var(--card-bg); border:1px solid var(--border-subtle);
+        border-radius:12px; padding:14px 16px; box-shadow:var(--sh-xs);
+    }
+    .cal-tip-icon { font-size:1.3rem; margin-bottom:7px; }
+    .cal-tip-title { font-size:.8rem; font-weight:800; color:var(--text); margin-bottom:4px; }
+    .cal-tip-body  { font-size:.76rem; color:var(--muted); line-height:1.5; font-weight:500; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── PAGE HEADER ────────────────────────────────────────────
+    st.markdown("""
+    <div class="cal-section-hdr">🗂️ Logistics & Planning Hub</div>
+    <p class="cal-section-sub">Analyze bandwidth, manage conflicts, and proactively plan your week.</p>
+    """, unsafe_allow_html=True)
+
+    if not events:
+        st.info("📅 No events loaded. Connect your Google Calendar in **Settings** to get started.")
+        _render_pro_tips()
+        return
+
+    # ── 1. WEEKLY BANDWIDTH KPIs ───────────────────────────────
+    st.markdown('<div class="cal-section-hdr">📊 Weekly Bandwidth</div>', unsafe_allow_html=True)
+
+    free_ev_str   = ", ".join(free_ev_labels) if free_ev_labels else "None"
+    free_ev_color = "green" if len(free_evenings) >= 2 else "amber" if len(free_evenings) == 1 else "red"
+    draft_color   = "amber" if ndrafts > 0 else "green"
+    draft_sub_txt = "Requires Approval" if ndrafts > 0 else "All clear"
+
+    st.markdown(f"""
+    <div class="cal-kpi-grid">
+      <div class="cal-kpi">
+        <div class="cal-kpi-label">Events (Next 7 Days)</div>
+        <div class="cal-kpi-value">{len(week_evs)}</div>
+        <div class="cal-kpi-sub blue">📅 {len(week_evs)} scheduled</div>
+      </div>
+      <div class="cal-kpi">
+        <div class="cal-kpi-label">Busiest Day</div>
+        <div class="cal-kpi-value">{busiest_label}</div>
+        <div class="cal-kpi-sub amber">⬆ {busiest_sub}</div>
+      </div>
+      <div class="cal-kpi">
+        <div class="cal-kpi-label">Free Evenings</div>
+        <div class="cal-kpi-value">{len(free_evenings)} Days</div>
+        <div class="cal-kpi-sub {free_ev_color}">⬆ {free_ev_str}</div>
+      </div>
+      <div class="cal-kpi">
+        <div class="cal-kpi-label">Pending Drafts</div>
+        <div class="cal-kpi-value">{ndrafts}</div>
+        <div class="cal-kpi-sub {draft_color}">⬆ {draft_sub_txt}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="cal-divider"></div>', unsafe_allow_html=True)
+
+    # ── 2. WEEK AT A GLANCE ────────────────────────────────────
+    st.markdown('<div class="cal-section-hdr">🗓️ Week at a Glance</div>', unsafe_allow_html=True)
+
+    COLORS = ["blue", "green", "purple", "amber", "rose", "slate", "blue"]
+    # Assign a stable color per unique event title
+    color_map: dict = {}
+    color_idx = 0
+    for ev in week_evs:
+        t = ev.get("title", "")
+        if t not in color_map:
+            color_map[t] = COLORS[color_idx % len(COLORS)]
+            color_idx += 1
+
+    # Build 7 columns
+    cols = st.columns(7)
+    for col_i, (col, d) in enumerate(zip(cols, week_days)):
+        is_today = (d == today)
+        hdr_cls  = "cal-day-hdr today" if is_today else "cal-day-hdr"
+        day_evs  = sorted(
+            [e for e in week_evs if _ev_date(e) == d],
+            key=lambda e: str(e.get("start_raw") or "")
+        )
+        with col:
             st.markdown(
-                f"<div style='padding:8px 12px;margin-bottom:6px;background:#f8fafc;"
-                f"border-radius:8px;border:1px solid #e2e8f0;'>"
-                f"<b>{start}</b> — {title}"
-                f"{'  📍 ' + loc if loc else ''}</div>",
+                f'<div class="{hdr_cls}">{d.strftime("%a")}<br>'
+                f'<span style="font-size:.8rem;font-weight:700;">{d.day}</span></div>',
                 unsafe_allow_html=True,
             )
-    else:
-        st.markdown("No events loaded. Connect your Google Calendar in Settings.")
+            if day_evs:
+                chips = ""
+                for ev in day_evs[:4]:   # cap at 4 chips per column to avoid overflow
+                    clr  = color_map.get(ev.get("title",""), "slate")
+                    time = "" if _is_allday(ev) else f'<span style="font-size:.65rem;opacity:.7;">{_hm(ev)}</span><br>'
+                    chips += f'<div class="cal-chip {clr}">{time}{ev.get("title","")}</div>'
+                if len(day_evs) > 4:
+                    chips += f'<div class="cal-chip slate">+{len(day_evs)-4} more</div>'
+                st.markdown(chips, unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="cal-chip free">Free Day</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="cal-divider"></div>', unsafe_allow_html=True)
+
+    # ── 3. PROACTIVE PLANNING + DRAFTS & CONFLICTS ─────────────
+    left_col, right_col = st.columns([1, 1], gap="large")
+
+    with left_col:
+        st.markdown('<div class="cal-section-hdr">🎯 Proactive Planning</div>', unsafe_allow_html=True)
+
+        # Build a contextual observation from free slots
+        now_dt = datetime.now().astimezone()
+        free_today = today not in day_counts
+        tomorrow   = today + timedelta(days=1)
+        free_tmrw  = tomorrow not in day_counts
+
+        if free_today:
+            obs = "You have a clear day today — great time to tackle something from your Ideas Inbox or plan ahead."
+        elif free_tmrw:
+            obs = f"Tomorrow looks open. Consider scheduling something meaningful or blocking focus time."
+        elif free_evenings:
+            day_name = free_evenings[0].strftime("%A")
+            obs = f"You have a free evening this **{day_name}**. A good opportunity to recharge or explore an idea."
+        elif len(week_evs) >= 8:
+            obs = f"Heavy week ahead with **{len(week_evs)} events**. Consider blocking buffer time to avoid burnout."
+        else:
+            obs = "Your week looks balanced. Keep an eye on the busiest day and protect recovery time."
+
+        st.markdown(f"""
+        <div class="cal-obs-card">
+            <div class="cal-obs-label">💡 AI Observation</div>
+            <div class="cal-obs-text">{obs}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Conflict summary
+        if all_conflicts:
+            st.markdown(f"""
+            <div class="cal-obs-card" style="border-left:3px solid #f43f5e;">
+                <div class="cal-obs-label" style="color:#e11d48;">⚠️ Conflicts Detected</div>
+                <div class="cal-obs-text">
+                    {len(all_conflicts)} scheduling conflict{"s" if len(all_conflicts)>1 else ""} found this week.
+                    Review them in <b>Drafts & Conflicts</b> →
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Quick action buttons
+        st.markdown("**Quick Actions**")
+        qa1, qa2 = st.columns(2)
+        with qa1:
+            if st.button("📋 View Today", key="cal_view_today", use_container_width=True):
+                st.session_state["cal_filter"] = "today"
+                st.rerun()
+        with qa2:
+            if st.button("🔍 Find Free Slot", key="cal_find_free", use_container_width=True):
+                st.session_state["cal_filter"] = "free"
+                st.rerun()
+
+        # Today's timeline
+        filter_mode = st.session_state.get("cal_filter")
+        if filter_mode == "today":
+            today_evs = sorted(
+                [e for e in events if _ev_date(e) == today],
+                key=lambda e: str(e.get("start_raw") or "")
+            )
+            st.markdown(f"**Today's Schedule — {today.strftime('%A, %b %d')}**")
+            if today_evs:
+                for ev in today_evs:
+                    t = _hm(ev)
+                    te = _hm_end(ev)
+                    title = ev.get("title", "Event")
+                    loc   = ev.get("location", "")
+                    clr = color_map.get(title, "blue")
+                    chip_html = (
+                        f'<div class="cal-chip {clr}" style="margin-bottom:5px;">'
+                        f'<span style="font-size:.7rem;opacity:.8;">{t} – {te}</span><br>'
+                        f'<b>{title}</b>'
+                        f'{(" · 📍 " + loc) if loc else ""}'
+                        f'</div>'
+                    )
+                    st.markdown(chip_html, unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="cal-chip free" style="margin-bottom:5px;">Nothing scheduled — enjoy the freedom!</div>', unsafe_allow_html=True)
+            if st.button("✖ Close", key="cal_close_today", use_container_width=True):
+                st.session_state["cal_filter"] = None
+                st.rerun()
+
+        elif filter_mode == "free":
+            st.markdown("**Free Slots This Week**")
+            if free_evenings:
+                for d in free_evenings:
+                    st.markdown(
+                        f'<div class="cal-chip free" style="margin-bottom:5px;">'
+                        f'{d.strftime("%A, %b %d")} — Free Evening</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown("No fully free evenings this week.")
+            free_days_week = [d for d in week_days if d not in day_counts]
+            for d in free_days_week:
+                st.markdown(
+                    f'<div class="cal-chip green" style="margin-bottom:5px;">'
+                    f'{d.strftime("%A, %b %d")} — Completely Free</div>',
+                    unsafe_allow_html=True,
+                )
+            if st.button("✖ Close", key="cal_close_free", use_container_width=True):
+                st.session_state["cal_filter"] = None
+                st.rerun()
+
+    with right_col:
+        st.markdown('<div class="cal-section-hdr">📌 Drafts & Conflicts</div>', unsafe_allow_html=True)
+
+        if not drafts and not all_conflicts:
+            st.markdown(
+                '<div class="cal-obs-card" style="text-align:center;color:var(--muted);">'
+                '<div style="font-size:1.5rem;margin-bottom:6px;">✅</div>'
+                '<div style="font-weight:700;">All clear</div>'
+                '<div style="font-size:.8rem;margin-top:3px;">No pending drafts or conflicts.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # Pending drafts
+            for i, draft in enumerate(drafts):
+                title    = draft.get("title", "Untitled")
+                start    = draft.get("start_time", "")
+                end_time = draft.get("end_time", "")
+                loc      = draft.get("location", "")
+                desc     = draft.get("description", "")
+
+                # Format times
+                try:
+                    s_dt = datetime.fromisoformat(start)
+                    e_dt = datetime.fromisoformat(end_time) if end_time else None
+                    time_str = s_dt.strftime("%a %b %d  %I:%M %p")
+                    if e_dt:
+                        time_str += " - " + e_dt.strftime("%I:%M %p")
+                except Exception:
+                    time_str = start[:16].replace("T", " ")
+
+                # Conflict check against existing week events
+                draft_conflicts = []
+                try:
+                    d_start = datetime.fromisoformat(start).astimezone()
+                    d_end   = datetime.fromisoformat(end_time).astimezone() if end_time else d_start + timedelta(hours=1)
+                    for ev in week_evs:
+                        e_start = _dt(ev)
+                        e_end   = _end_dt(ev)
+                        if e_start and e_end and e_end > d_start and e_start < d_end:
+                            draft_conflicts.append(ev)
+                except Exception:
+                    pass
+
+                conflict_html = ""
+                if draft_conflicts:
+                    for dc in draft_conflicts[:2]:
+                        ct = _hm(dc)
+                        ce = _hm_end(dc)
+                        conflict_html += (
+                            f'<div class="cal-conflict-box">'
+                            f'⚠️ <b>Conflict:</b> Overlaps with {dc.get("title","")} '
+                            f'({ct} – {ce}).</div>'
+                        )
+
+                st.markdown(f"""
+                <div class="cal-draft-card">
+                    <div style="font-size:.68rem;font-weight:800;color:#f59e0b;
+                                text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;">
+                        🟡 Pending Approval ({i+1})
+                    </div>
+                    <div class="cal-draft-title">{title}</div>
+                    <div class="cal-draft-meta">{time_str}{(" · 📍 " + loc) if loc else ""}</div>
+                    {conflict_html}
+                </div>
+                """, unsafe_allow_html=True)
+
+                btn_a, btn_b, btn_c = st.columns([1.2, 1.2, 1])
+                with btn_a:
+                    if st.button("➕ Add to Calendar", key=f"cal_add_{i}", type="primary", use_container_width=True):
+                        with st.spinner("Adding…"):
+                            add_to_calendar(draft)
+                        st.rerun()
+                with btn_b:
+                    if draft_conflicts and st.button("📅 Auto-Reschedule", key=f"cal_reschedule_{i}", use_container_width=True):
+                        st.toast("Auto-reschedule: use the Home tab to ask the AI for a new time.")
+                with btn_c:
+                    if st.button("🗑️", key=f"cal_reject_{i}", use_container_width=True, help="Discard draft"):
+                        reject_draft(draft)
+                        st.rerun()
+
+            # Calendar conflicts (non-draft)
+            if all_conflicts:
+                st.markdown("**⚠️ Calendar Conflicts This Week**")
+                for ev_a, ev_b in all_conflicts[:3]:
+                    ta, tb = _hm(ev_a), _hm(ev_b)
+                    st.markdown(f"""
+                    <div class="cal-conflict-box">
+                        ⚠️ <b>{ev_a.get("title","")}</b> ({ta}) overlaps with
+                        <b>{ev_b.get("title","")}</b> ({tb})
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="cal-divider"></div>', unsafe_allow_html=True)
+
+    # ── 4. PRO TIPS ────────────────────────────────────────────
+    _render_pro_tips()
 
 
-# ─────────────────────────────────────────────────────────────
-# MEMORY BANK PAGE  (placeholder — future)
-# ─────────────────────────────────────────────────────────────
-def _render_memory(memory_rows=None, **_):
+def _render_pro_tips():
     import streamlit as st
-    st.markdown("### 🧠 Memory Bank")
-    rows = memory_rows or []
-    if rows:
-        st.markdown(f"**{len(rows)} learnings stored.**")
-        for r in reversed(rows[-30:]):
-            ts      = r.get("timestamp", "")[:10]
-            mission = r.get("mission","") or r.get("key","") or r.get("topic","")
-            fb      = r.get("feedback","") or r.get("value","")
-            rating  = r.get("rating","")
+    st.markdown('<div class="cal-section-hdr">💡 Pro Tips</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="cal-tips-grid">
+      <div class="cal-tip">
+        <div class="cal-tip-icon">🛡️</div>
+        <div class="cal-tip-title">Protect buffer time</div>
+        <div class="cal-tip-body">Add 15-min buffers between back-to-back meetings.
+        Back-to-back drains focus — even a short break resets your cognitive state.</div>
+      </div>
+      <div class="cal-tip">
+        <div class="cal-tip-icon">🌅</div>
+        <div class="cal-tip-title">Own your mornings</div>
+        <div class="cal-tip-body">Block 8-10 AM for deep work 3 days a week.
+        Morning hours have the highest cognitive bandwidth — guard them from meetings.</div>
+      </div>
+      <div class="cal-tip">
+        <div class="cal-tip-icon">🔁</div>
+        <div class="cal-tip-title">Weekly review ritual</div>
+        <div class="cal-tip-body">Every Sunday, spend 10 minutes planning the week ahead.
+        Reviewing conflicts and free slots proactively saves hours of reactive scrambling.</div>
+      </div>
+      <div class="cal-tip">
+        <div class="cal-tip-icon">📦</div>
+        <div class="cal-tip-title">Batch similar tasks</div>
+        <div class="cal-tip-body">Group errands, calls, and admin into single blocks.
+        Context switching costs 20+ minutes each time — batching compounds efficiency.</div>
+      </div>
+      <div class="cal-tip">
+        <div class="cal-tip-icon">🚫</div>
+        <div class="cal-tip-title">Learn to decline</div>
+        <div class="cal-tip-body">Every "yes" is a "no" to something else.
+        A meeting with no clear agenda or outcome is a draft worth discarding.</div>
+      </div>
+      <div class="cal-tip">
+        <div class="cal-tip-icon">🌙</div>
+        <div class="cal-tip-title">Guard family evenings</div>
+        <div class="cal-tip-body">Free evenings are your most valuable resource.
+        Treat them like appointments — block them in the calendar before work fills them.</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+
+def _render_memory(memory_rows=None, user_email="", **_):
+    """
+    Context Engine page — surfaces what the AI knows about the household.
+    Sections:
+      0. KPI bar
+      1. Household Identity Clusters  (left col)
+      2. How AI Uses This Data        (left col, below clusters)
+      3. Recently Learned — confirm / forget  (right col)
+      4. Quick Idea Inbox             (right col, below deductions)
+      5. Pro Tips
+    Zero LLM tokens — pure local logic + file I/O.
+    """
+    import streamlit as st
+    import os
+
+    email = user_email or st.session_state.get("user_email", "")
+    rows  = list(memory_rows or [])
+
+    prefs: list = []
+    ideas: list = []
+    try:
+        from src.utils import (
+            _safe_user_key, _user_memory_path, _read_json,
+            load_user_ideas, add_idea_to_inbox,
+        )
+        if email:
+            safe       = _safe_user_key(email)
+            pref_path  = _user_memory_path(email)
+            prefs      = _read_json(pref_path) if os.path.exists(pref_path) else []
+            ideas      = load_user_ideas(safe)
+    except Exception:
+        pass
+
+    active_ideas = [i for i in ideas if (i.get("status") or "active") == "active"]
+
+    # ── CSS ──────────────────────────────────────────────────────
+    st.markdown("""
+<style>
+.mem-title{font-size:1.35rem;font-weight:900;letter-spacing:-.025em;
+    display:flex;align-items:center;gap:9px;color:var(--text);margin:0 0 4px;}
+.mem-sub{font-size:.88rem;color:var(--muted);margin:0 0 18px;}
+.mem-divider{height:1px;background:var(--border-subtle);margin:22px 0;}
+.mem-kpi-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:4px;}
+.mem-kpi{background:var(--card-bg);border:1px solid var(--border-subtle);
+    border-radius:12px;padding:14px 18px;flex:1 1 110px;min-width:100px;
+    box-shadow:var(--sh-xs);}
+.mem-kpi-label{font-size:.68rem;font-weight:800;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--muted);margin-bottom:5px;}
+.mem-kpi-val{font-size:1.75rem;font-weight:900;color:var(--text);line-height:1;}
+.mem-sec-hdr{font-size:1.05rem;font-weight:900;color:var(--text);
+    display:flex;align-items:center;gap:8px;margin:0 0 6px;}
+.mem-sec-sub{font-size:.82rem;color:var(--muted);margin:0 0 14px;}
+.mem-cluster-card{background:var(--card-bg);border:1px solid var(--border-subtle);
+    border-radius:14px;padding:18px 20px;box-shadow:var(--sh-sm);}
+.mem-cluster-group{margin-bottom:14px;}
+.mem-cluster-group-label{font-size:.82rem;font-weight:800;color:var(--text);
+    margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border-subtle);}
+.mem-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px;}
+.mem-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;
+    border-radius:20px;font-size:.78rem;font-weight:700;border:1.5px solid;}
+.chip-pref{background:#ecfdf5;color:#065f46;border-color:#6ee7b7;}
+.chip-pattern{background:#ede9fe;color:#4c1d95;border-color:#c4b5fd;}
+.chip-idea{background:#fef3c7;color:#92400e;border-color:#fcd34d;}
+[data-theme="dark"] .chip-pref{background:#052e16;color:#86efac;border-color:#065f46;}
+[data-theme="dark"] .chip-pattern{background:#1e1040;color:#c4b5fd;border-color:#4c1d95;}
+[data-theme="dark"] .chip-idea{background:#2d1a00;color:#fcd34d;border-color:#92400e;}
+.mem-ai-box{background:var(--chip-bg);border-radius:12px;padding:14px 16px;
+    border:1px solid var(--border-subtle);font-size:.85rem;line-height:1.6;}
+.mem-ai-fact{color:#6366f1;font-size:.82rem;}
+[data-theme="dark"] .mem-ai-fact{color:#818cf8;}
+.mem-deduction-card{background:var(--card-bg);border:1px solid var(--border-subtle);
+    border-radius:14px;padding:16px 18px;margin-bottom:12px;box-shadow:var(--sh-sm);}
+.mem-deduction-text{font-size:.9rem;color:var(--text);line-height:1.5;margin-bottom:8px;}
+.mem-deduction-meta{font-size:.72rem;color:var(--muted);margin-bottom:10px;}
+.mem-idea-item{background:var(--chip-bg);border:1px solid var(--border-subtle);
+    border-radius:10px;padding:10px 14px;margin-bottom:7px;
+    display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.mem-idea-text{font-size:.85rem;color:var(--text);flex:1;}
+.mem-idea-ts{font-size:.7rem;color:var(--muted);white-space:nowrap;}
+.mem-tip-card{background:var(--card-bg);border:1px solid var(--border-subtle);
+    border-radius:12px;padding:16px 18px;box-shadow:var(--sh-xs);
+    border-left:4px solid #6366f1;margin-bottom:12px;}
+[data-theme="dark"] .mem-tip-card{border-left-color:#818cf8;}
+</style>
+""", unsafe_allow_html=True)
+
+    # ── HEADER ────────────────────────────────────────────────────
+    st.markdown('<p class="mem-title">&#x1F9E0; Context Engine</p>', unsafe_allow_html=True)
+    st.markdown('<p class="mem-sub">How the Family COO understands your household.</p>',
+                unsafe_allow_html=True)
+
+    _, rbtn_col = st.columns([9, 1])
+    with rbtn_col:
+        if st.button("\U0001f504", key="mem_refresh", help="Refresh memory data"):
+            st.rerun()
+
+    # ── KPI BAR ───────────────────────────────────────────────────
+    num_prefs    = len([p for p in prefs if p.get("kind") == "preference"])
+    num_patterns = len([p for p in prefs if p.get("kind") == "pattern"])
+    num_ideas    = len(active_ideas)
+    num_learned  = len(rows)
+
+    chip_ideas  = "chip-amber" if num_ideas > 0  else "chip-green"
+    chip_learn  = "chip-green" if num_learned > 0 else "chip-blue"
+
+    st.markdown(
+        f'<div class="mem-kpi-row">'
+        f'<div class="mem-kpi"><div class="mem-kpi-label">Preferences</div>'
+        f'<div class="mem-kpi-val">{num_prefs}</div></div>'
+        f'<div class="mem-kpi"><div class="mem-kpi-label">Patterns</div>'
+        f'<div class="mem-kpi-val">{num_patterns}</div></div>'
+        f'<div class="mem-kpi"><div class="mem-kpi-label">Ideas Inbox</div>'
+        f'<div class="mem-kpi-val">{num_ideas}</div></div>'
+        f'<div class="mem-kpi"><div class="mem-kpi-label">Learned</div>'
+        f'<div class="mem-kpi-val">{num_learned}</div></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="mem-divider"></div>', unsafe_allow_html=True)
+
+    # ── TWO-COLUMN LAYOUT ─────────────────────────────────────────
+    left_col, right_col = st.columns([1.1, 1], gap="large")
+
+    # ════════════════════════════════════
+    # LEFT — Identity Clusters + AI box
+    # ════════════════════════════════════
+    with left_col:
+        st.markdown('<p class="mem-sec-hdr">&#x1F9EC; Household Identity Clusters</p>',
+                    unsafe_allow_html=True)
+
+        CLUSTER_MAP = {
+            "Diet & Dining":       ["food", "diet", "meal", "cuisine", "eat", "cook",
+                                    "breakfast", "snack", "protein"],
+            "Media & Interests":   ["media", "show", "series", "movie", "watch", "read",
+                                    "book", "podcast", "python", "ai", "tech", "code",
+                                    "music", "game", "cricket"],
+            "Logistics & Routine": ["schedule", "routing", "drive", "car", "fitness",
+                                    "gym", "exercise", "volleyball", "sport", "class",
+                                    "weekly", "activity", "routine", "proactive",
+                                    "scheduling", "frequency"],
+            "Family & Outings":    ["family", "kid", "daughter", "son", "outing", "beach",
+                                    "temple", "adventure", "weekend", "holiday"],
+            "Style & Preferences": ["tone", "style", "response", "decision", "prefer",
+                                    "approach", "framing"],
+        }
+
+        EMOJI_MAP = {
+            "food": "&#x1F37D;", "diet": "&#x1F37D;", "cuisine": "&#x1F37D;",
+            "fitness": "&#x1F4AA;", "gym": "&#x1F4AA;", "sport": "&#x1F4AA;",
+            "volleyball": "&#x1F3D0;", "cricket": "&#x1F3CF;",
+            "python": "&#x1F4BB;", "ai": "&#x1F4BB;", "tech": "&#x1F4BB;",
+            "music": "&#x1F3B5;", "series": "&#x1F3AC;", "movie": "&#x1F3AC;",
+            "car": "&#x1F697;", "drive": "&#x1F697;",
+            "family": "&#x1F46A;", "daughter": "&#x1F467;",
+            "schedule": "&#x1F4C5;", "outing": "&#x1F334;", "beach": "&#x1F334;",
+        }
+
+        def _cluster(entry):
+            txt = (str(entry.get("key","")) + " " + str(entry.get("value",""))).lower()
+            for c, kws in CLUSTER_MAP.items():
+                if any(k in txt for k in kws):
+                    return c
+            return "Other"
+
+        def _chip_emoji(entry):
+            txt = str(entry.get("key","")).lower()
+            for kw, em in EMOJI_MAP.items():
+                if kw in txt:
+                    return em
+            return "&#x2726;" if entry.get("kind") == "preference" else "&#x1F501;"
+
+        def _conf(entry):
+            c = entry.get("confidence")
+            return f" ({int(float(c)*100)}%)" if c else ""
+
+        def _chip_cls(entry):
+            if entry.get("kind") == "idea":
+                return "chip-idea"
+            return "chip-pref" if entry.get("kind") == "preference" else "chip-pattern"
+
+        clusters: dict = {}
+        for entry in prefs:
+            clusters.setdefault(_cluster(entry), []).append(entry)
+        if active_ideas:
+            clusters["Quick Ideas"] = [
+                {"kind": "idea",
+                 "key": i.get("text","")[:38],
+                 "value": "",
+                 "confidence": i.get("confidence", 0.75)}
+                for i in active_ideas[:5]
+            ]
+
+        st.markdown('<div class="mem-cluster-card">', unsafe_allow_html=True)
+        if not clusters:
             st.markdown(
-                f"<div style='padding:8px 12px;margin-bottom:5px;background:#f8fafc;"
-                f"border-radius:8px;border:1px solid #e2e8f0;font-size:0.83rem;'>"
-                f"<b>{rating} {mission}</b><br>"
-                f"<span style='color:#64748b;'>{fb}</span>"
-                + (f"  <span style='color:#94a3b8;font-size:0.75rem;'>{ts}</span>" if ts else "")
-                + "</div>",
+                '<div style="text-align:center;padding:32px;color:var(--muted);">'
+                '&#x1F331; No identity data yet.<br>'
+                '<span style="font-size:.82rem;">The brain learns as you interact.</span>'
+                '</div>',
                 unsafe_allow_html=True,
             )
-    else:
-        st.info("No memories yet. The brain learns as you use the COO.")
+        else:
+            for cname, entries in clusters.items():
+                if not entries:
+                    continue
+                chips = ""
+                for e in entries[:3]:
+                    label = (e.get("key") or "").replace("_", " ").title()
+                    em    = "&#x1F4A1;" if e.get("kind") == "idea" else _chip_emoji(e)
+                    cls   = _chip_cls(e)
+                    chips += (
+                        f'<span class="mem-chip {cls}">'
+                        f'{em} {label}{_conf(e)}</span>'
+                    )
+                st.markdown(
+                    f'<div class="mem-cluster-group">'
+                    f'<div class="mem-cluster-group-label">{cname}</div>'
+                    f'<div class="mem-chips">{chips}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── Summary + Quick Suggestions ─────────────────────────
+        st.markdown('<div class="mem-divider" style="margin:16px 0;"></div>',
+                    unsafe_allow_html=True)
+
+        # --- Build summary sentence from top clusters ---
+        top_pref = [p for p in prefs if p.get("kind") == "preference"]
+        top_pat  = [p for p in prefs if p.get("kind") == "pattern"]
+
+        # Derive 2-3 highlight phrases from real data
+        highlights = []
+        for p in (top_pref + top_pat)[:6]:
+            v = (p.get("value") or p.get("key") or "").strip()
+            if v:
+                highlights.append(v[:60])
+
+        if highlights:
+            joined = " · ".join(highlights[:3])
+            summary_html = (
+                f'<div style="background:var(--chip-bg);border-radius:10px;'
+                f'padding:12px 14px;margin-bottom:16px;border:1px solid var(--border-subtle);'
+                f'font-size:.85rem;color:var(--text);line-height:1.6;">'
+                f'<b>&#x1F4CB; Your Profile Summary</b><br>'
+                f'<span style="color:var(--muted);">{joined}</span>'
+                f'</div>'
+            )
+            st.markdown(summary_html, unsafe_allow_html=True)
+
+        # --- Build 3 actionable suggestions + 1 improvement idea ---
+        # Derived purely from the user's prefs / patterns — zero LLM
+        SUGGESTION_RULES = [
+            # (trigger_keywords_in_prefs, suggestion_text)
+            (["food", "cuisine", "takeout", "indian"],
+             "&#x1F37D; Try cooking one new Indian recipe this week using ingredients "
+             "you already have at home. It cuts takeout costs and fits your food preference perfectly."),
+            (["python", "ai", "tech", "code"],
+             "&#x1F4BB; Block 45 min on a weekday morning for a focused AI or Python "
+             "micro-project. Short daily sessions compound faster than weekend marathons."),
+            (["fitness", "gym", "e6s", "volleyball", "sport"],
+             "&#x1F3CB; Sync your fitness schedule to your Google Calendar so the COO "
+             "can protect those slots from being overbooked automatically."),
+            (["series", "movie", "hollywood", "hindi", "watch"],
+             "&#x1F3AC; Queue up one new title that matches your taste this weekend "
+             "and schedule a 2-hour watch window as a real calendar event."),
+            (["music", "yousician", "guitar", "casio", "piano"],
+             "&#x1F3B5; Pair your commute time with Yousician audio lessons — "
+             "it turns dead drive time into practice time with zero extra scheduling."),
+            (["beach", "outing", "temple", "outdoor", "weekend"],
+             "&#x1F334; Plan your next family outing for a free Saturday morning "
+             "using the Calendar tab — the COO will flag any conflicts automatically."),
+            (["daughter", "kid", "judo", "chess", "class"],
+             "&#x1F467; Review your daughter's class schedule this week and add "
+             "prep-time buffers before each pickup in Google Calendar."),
+            (["car", "kia", "sunpass", "drive"],
+             "&#x1F697; Check that your SunPass is topped up if you have toll routes "
+             "planned this week — quick 2-minute task that saves frustration."),
+            (["schedule", "proactive", "planning"],
+             "&#x1F4C5; Use the Home tab to ask the COO to plan your full week in one "
+             "shot — say 'Plan my week' and it will suggest a structured schedule."),
+        ]
+
+        IMPROVEMENT_RULES = [
+            (["food", "takeout", "diet"],
+             "&#x1F331; Add your meal preferences in more detail — e.g., "
+             "specific cuisines per day of week. The AI can then proactively "
+             "suggest meal plans that prevent decision fatigue on busy evenings."),
+            (["fitness", "gym", "sport", "volleyball"],
+             "&#x1F331; Log your energy level after each workout session using "
+             "'Train the Brain'. Over 2 weeks the AI will learn your peak-performance "
+             "windows and schedule demanding tasks around them."),
+            (["music", "yousician", "guitar"],
+             "&#x1F331; Set a weekly practice goal in the Idea Inbox "
+             "(e.g., '20 min Yousician daily'). The COO can then surface "
+             "it as a recurring mission and track your streak."),
+            (["python", "ai", "tech"],
+             "&#x1F331; Share your current project or learning goal with the COO "
+             "via the Home tab. It will break it into weekly milestones and schedule "
+             "focus blocks automatically."),
+            (["schedule", "planning", "proactive"],
+             "&#x1F331; Enable a weekly Sunday review habit: ask the COO every Sunday "
+             "evening to brief you on the upcoming week. Consistency trains the AI "
+             "faster than sporadic use."),
+        ]
+
+        def _pref_text_blob():
+            return " ".join(
+                (p.get("key","") + " " + p.get("value","")).lower()
+                for p in (top_pref + top_pat)
+            )
+
+        blob = _pref_text_blob()
+
+        # Pick best-matching 3 suggestions
+        matched_sugg = []
+        for kws, sugg in SUGGESTION_RULES:
+            if any(kw in blob for kw in kws):
+                matched_sugg.append(sugg)
+            if len(matched_sugg) >= 3:
+                break
+        # Pad with generic if needed
+        while len(matched_sugg) < 3:
+            matched_sugg.append(
+                "&#x1F4DD; Ask the COO 'What should I focus on this week?' "
+                "to get a personalised action plan based on your profile."
+            )
+
+        # Pick best-matching improvement
+        matched_improve = ""
+        for kws, imp in IMPROVEMENT_RULES:
+            if any(kw in blob for kw in kws):
+                matched_improve = imp
+                break
+        if not matched_improve:
+            matched_improve = (
+                "&#x1F331; The more you interact with the COO, the sharper its "
+                "suggestions become. Try completing 3 missions this week and rating "
+                "each one to accelerate the learning curve."
+            )
+
+        st.markdown(
+            '<p class="mem-sec-hdr">&#x26A1; Quick Suggestions</p>',
+            unsafe_allow_html=True,
+        )
+
+        for sugg in matched_sugg:
+            st.markdown(
+                f'<div style="margin-bottom:12px;padding:12px 14px;'
+                f'background:var(--card-bg);border:1px solid var(--border-subtle);'
+                f'border-radius:10px;border-left:3px solid #6366f1;'
+                f'font-size:.85rem;color:var(--text);line-height:1.55;">'
+                f'<span style="color:#6366f1;font-style:italic;font-weight:700;">'
+                f'AI Suggestion:</span> {sugg}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            f'<div style="margin-top:4px;padding:12px 14px;'
+            f'background:var(--chip-bg);border:1px solid var(--border-subtle);'
+            f'border-radius:10px;border-left:3px solid #10b981;'
+            f'font-size:.85rem;color:var(--text);line-height:1.55;">'
+            f'<span style="color:#10b981;font-style:italic;font-weight:700;">'
+            f'&#x1F4A1; Improvement Idea:</span> {matched_improve}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ════════════════════════════════════
+    # RIGHT — Recently Learned + Idea Inbox
+    # ════════════════════════════════════
+    with right_col:
+
+        # Recently Learned
+        st.markdown('<p class="mem-sec-hdr">&#x1F50D; Recently Learned</p>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            '<p class="mem-sec-sub">Review the AI deductions to improve accuracy.</p>',
+            unsafe_allow_html=True,
+        )
+
+        recent = list(reversed(rows[-20:]))
+
+        if not recent:
+            st.markdown(
+                '<div class="mem-deduction-card" style="text-align:center;'
+                'color:var(--muted);padding:28px;">'
+                '&#x2728; No learnings yet.<br>'
+                '<span style="font-size:.82rem;">Complete a mission to start '
+                'building memory.</span></div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            for idx, row in enumerate(recent[:5]):
+                mission  = (row.get("mission") or row.get("key") or "Unknown").strip()
+                feedback = (row.get("feedback") or "").strip()
+                ts       = str(row.get("timestamp",""))[:16]
+                rating   = row.get("rating","")
+                r_icon   = "&#x1F44D;" if "👍" in str(rating) else (
+                           "&#x1F44E;" if "👎" in str(rating) else "&#x2734;")
+
+                deduction = mission[:120] + ("…" if len(mission) > 120 else "")
+                fb_line   = (
+                    f'<div class="mem-deduction-meta">{feedback[:80]}</div>'
+                    if feedback else ""
+                )
+                ts_line   = (
+                    f'<div class="mem-deduction-meta">&#x1F4C5; {ts} &nbsp;{r_icon}</div>'
+                    if ts else ""
+                )
+
+                st.markdown(
+                    f'<div class="mem-deduction-card">'
+                    f'<div class="mem-deduction-text">'
+                    f'&#x1F9E0; <b>Deduction:</b> {deduction}</div>'
+                    f'{fb_line}{ts_line}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                cf_col, fg_col = st.columns(2)
+                with cf_col:
+                    if st.button(
+                        "&#x2705; Confirm", key=f"mem_confirm_{idx}",
+                        use_container_width=True
+                    ):
+                        st.toast("Confirmed — kept in memory.")
+                with fg_col:
+                    if st.button(
+                        "&#x2716; Forget", key=f"mem_forget_{idx}",
+                        use_container_width=True
+                    ):
+                        try:
+                            from src.utils import _read_json, _write_json, MEMORY_FILE
+                            all_r = _read_json(MEMORY_FILE)
+                            all_r = [
+                                r for r in all_r
+                                if r.get("mission","") != row.get("mission","")
+                            ]
+                            _write_json(MEMORY_FILE, all_r)
+                        except Exception:
+                            pass
+                        st.toast("Forgotten.")
+                        st.rerun()
+
+            if len(recent) > 5:
+                with st.expander(f"See {len(recent)-5} more learnings"):
+                    for row in recent[5:]:
+                        m  = (row.get("mission") or "Unknown").strip()
+                        ts = str(row.get("timestamp",""))[:16]
+                        ri = "&#x1F44D;" if "👍" in str(row.get("rating","")) else "&#x1F44E;"
+                        st.markdown(
+                            f'<div class="mem-idea-item">'
+                            f'<span class="mem-idea-text">{ri} {m[:72]}</span>'
+                            f'<span class="mem-idea-ts">{ts}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+        # Quick Idea Inbox
+        st.markdown('<div class="mem-divider" style="margin:16px 0;"></div>',
+                    unsafe_allow_html=True)
+        st.markdown('<p class="mem-sec-hdr">&#x1F4E5; Quick Idea Inbox</p>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            '<p class="mem-sec-sub">Drop an idea here…</p>',
+            unsafe_allow_html=True,
+        )
+
+        new_idea = st.text_input(
+            label="idea",
+            placeholder="e.g. DIY wall decor ideas",
+            key="mem_new_idea_input",
+            label_visibility="collapsed",
+        )
+        if st.button(
+            "&#x1F4BE; Save to Inbox", key="mem_save_idea",
+            use_container_width=True, type="primary"
+        ):
+            text = (new_idea or "").strip()
+            if not text:
+                st.warning("Please type an idea first.")
+            elif not email:
+                st.warning("Sign in to save ideas.")
+            else:
+                try:
+                    from src.utils import _safe_user_key, add_idea_to_inbox
+                    add_idea_to_inbox(_safe_user_key(email), text)
+                    st.toast(f"Saved: {text[:40]}")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Could not save: {ex}")
+
+        if active_ideas:
+            st.markdown(
+                f'<div style="font-size:.8rem;font-weight:800;color:var(--muted);'
+                f'margin:10px 0 8px;text-transform:uppercase;letter-spacing:.05em;">'
+                f'{len(active_ideas)} ideas in inbox</div>',
+                unsafe_allow_html=True,
+            )
+            for idea in active_ideas[:8]:
+                ts_raw = idea.get("ts_utc","")[:10]
+                text   = (idea.get("text") or "").strip()
+                short  = text[:60] + ("…" if len(text) > 60 else "")
+                st.markdown(
+                    f'<div class="mem-idea-item">'
+                    f'<span class="mem-idea-text">&#x1F4A1; {short}</span>'
+                    f'<span class="mem-idea-ts">{ts_raw}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            if len(active_ideas) > 8:
+                st.caption(f"+{len(active_ideas)-8} more. Ask the COO to show all.")
+
+    # ── PRO TIPS ──────────────────────────────────────────────────
+    st.markdown('<div class="mem-divider"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="mem-sec-hdr" style="font-size:1.08rem;">'
+        '&#x1F4A1; Pro Tips — Getting the Most from Memory</p>',
+        unsafe_allow_html=True,
+    )
+
+    TIPS = [
+        ("&#x1F331; Feed the Brain",
+         "The more missions you complete and rate, the sharper the AI gets. "
+         "After any plan, tap Confirm or give feedback to log a result."),
+        ("&#x2716; Forget Errors Fast",
+         "If the AI learned something wrong, hit Forget immediately. "
+         "Early corrections prevent bad patterns from compounding over time."),
+        ("&#x1F4A1; Idea Inbox = Brain Dump",
+         "Don't overthink it — drop any passing thought here. "
+         "The AI will surface relevant ideas when the right moment arrives."),
+        ("&#x1F501; Patterns Beat One-Offs",
+         "Tell the AI about recurring routines (volleyball Mondays, "
+         "Indian food Fridays). It uses patterns far more than single events."),
+        ("&#x1F3AF; Name Things Precisely",
+         "Saying 'Judo on Tue/Thu at 5:30' is 10x more useful than "
+         "'daughter class'. Specifics produce far better suggestions."),
+        ("&#x1F9EC; Review Clusters Weekly",
+         "Scan Identity Clusters every Sunday. Remove anything stale or wrong. "
+         "Fresh data keeps the AI contextually accurate."),
+    ]
+
+    tip_cols = st.columns(3)
+    for idx, (title, body) in enumerate(TIPS):
+        with tip_cols[idx % 3]:
+            st.markdown(
+                f'<div class="mem-tip-card">'
+                f'<div style="font-weight:800;font-size:.88rem;color:var(--text);'
+                f'margin-bottom:6px;">{title}</div>'
+                f'<div style="font-size:.82rem;color:var(--muted);line-height:1.5;">'
+                f'{body}</div></div>',
+                unsafe_allow_html=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────
 # SETTINGS PAGE  (placeholder — future)
 # ─────────────────────────────────────────────────────────────
-def _render_settings(**_):
+def _render_settings(user_email="", user_name="", **_):
     import streamlit as st
+    from src.flow import begin_reconnect, complete_reconnect, clear_reconnect
+    from src.gcal import get_calendar_service, start_device_flow
+
     st.markdown("### ⚙️ Settings")
-    st.info("Settings panel coming soon.")
-    st.markdown("""
-    **Planned settings:**
-    - Default location & timezone
-    - Notification preferences
-    - Calendar sync options
-    - PIN / account management
-    - Brain training preferences
-    """)
+
+    # ── 1. ACCOUNT ──────────────────────────────────────────────
+    with st.expander("👤 Account", expanded=True):
+        email = user_email or st.session_state.get("user_email", "")
+        st.markdown(f"**Signed in as:** `{email}`")
+        loc = st.text_input(
+            "📍 Default Location",
+            value=st.session_state.get("user_location", "Tampa, FL"),
+            key="settings_location",
+            placeholder="e.g. Tampa, FL",
+        )
+        if st.button("Save Location", key="settings_save_location"):
+            st.session_state["user_location"] = loc.strip()
+            st.success("✅ Location saved.")
+
+    # ── 2. GOOGLE CALENDAR ──────────────────────────────────────
+    with st.expander("🗓️ Google Calendar", expanded=True):
+        email = st.session_state.get("user_email", "")
+        svc = None
+        try:
+            svc = get_calendar_service(user_id=email)
+        except Exception:
+            pass
+
+        if svc:
+            st.success("✅ Google Calendar is **connected**.")
+            events_ok = st.session_state.get("calendar_online", False)
+            count = len(st.session_state.get("calendar_events") or [])
+            st.caption(f"{count} events loaded  •  Status: {'🟢 Online' if events_ok else '🟡 Checking…'}")
+            if st.button("🔌 Disconnect Calendar", key="settings_disconnect"):
+                # Wipe token
+                try:
+                    import re, os, json
+                    safe = re.sub(r"[^a-zA-Z0-9_]", "_", email.lower())
+                    p = os.path.join("memory", "users", safe, "gcal_token.json")
+                    if os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
+                try:
+                    from src.token_store import supabase_upsert_token
+                    supabase_upsert_token(st, user_id=email, token_json=None, provider="google_calendar")
+                except Exception:
+                    pass
+                st.session_state["calendar_online"] = False
+                st.session_state["calendar_events"] = None
+                st.rerun()
+        else:
+            st.info("Connect your Google Calendar to see events and schedule tasks.")
+
+            flow = st.session_state.get("device_flow")
+
+            if not flow:
+                if st.button("🔗 Connect Google Calendar", key="settings_cal_connect", type="primary"):
+                    with st.spinner("Starting Google auth…"):
+                        result = start_device_flow()
+                    if result.get("error"):
+                        st.error(f"Could not start auth: {result['error']}")
+                    else:
+                        st.session_state["device_flow"] = result
+                        st.rerun()
+            else:
+                vc  = flow.get("user_code", "")
+                url = flow.get("verification_url") or flow.get("verification_uri", "https://google.com/device")
+                exp = flow.get("expires_in", 1800)
+
+                st.markdown(
+                    f"""
+                    **Step 1 —** Open **[{url}]({url})** on any device  
+                    **Step 2 —** Sign in with your Google account  
+                    **Step 3 —** Enter this code:
+                    """,
+                    unsafe_allow_html=False,
+                )
+                st.code(vc, language=None)
+                st.caption(f"Code expires in {exp // 60} minutes. Press **Done** after entering it.")
+
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("✅ Done — I entered the code", key="settings_cal_done", type="primary", use_container_width=True):
+                        with st.spinner("Verifying…"):
+                            ok, msg = complete_reconnect()
+                        if ok:
+                            st.success(msg)
+                            st.session_state["device_flow"] = None
+                            st.rerun()
+                        elif "authorization_pending" in msg or "slow_down" in msg:
+                            st.warning("Still waiting — Google hasn't confirmed yet. Wait a moment and try again.")
+                        else:
+                            st.error(f"Auth failed: {msg}")
+                with col2:
+                    if st.button("✖ Cancel", key="settings_cal_cancel", use_container_width=True):
+                        st.session_state["device_flow"] = None
+                        st.rerun()
+
+    # ── 3. TIMEZONE ─────────────────────────────────────────────
+    with st.expander("🕐 Timezone", expanded=False):
+        detected = st.session_state.get("user_tz", "")
+        if detected:
+            st.success(f"✅ Auto-detected: **{detected}**")
+        else:
+            st.info("Timezone is auto-detected from your browser on first load.")
+        manual = st.text_input(
+            "Override timezone (optional)",
+            value=detected,
+            key="settings_tz",
+            placeholder="e.g. America/New_York",
+        )
+        if st.button("Apply Timezone", key="settings_save_tz"):
+            if manual.strip():
+                st.session_state["user_tz"] = manual.strip()
+                try:
+                    from src.gcal import set_display_tz
+                    set_display_tz(manual.strip())
+                except Exception:
+                    pass
+                st.success(f"✅ Timezone set to {manual.strip()}")
+                st.session_state["calendar_events"] = None  # force refresh
+
+    # ── 4. ABOUT ────────────────────────────────────────────────
+    with st.expander("ℹ️ About", expanded=False):
+        st.markdown("""
+        **Family COO** — AI Operations Center  
+        Powered by Claude (Anthropic) + Google Calendar  
+        """)

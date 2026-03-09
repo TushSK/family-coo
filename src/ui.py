@@ -695,7 +695,7 @@ def render_sidebar(status, count, on_start, on_clear, on_complete):
             unsafe_allow_html=True,
         )
 
-        # Status
+        # Status + shortcut Connect button when offline
         dot  = "#10b981" if is_online else "#ef4444"
         blbl = "Online"   if is_online else "Offline"
         bcls = "coo-status-badge" + ("" if is_online else " offline")
@@ -705,9 +705,15 @@ def render_sidebar(status, count, on_start, on_clear, on_complete):
             f'<div class="{bcls}">'
             f'<span style="width:6px;height:6px;border-radius:50%;background:{dot};display:inline-block;margin-right:3px;"></span>'
             f'{blbl}</div></div>'
-            f'<div style="font-size:11px;color:#94a3b8;padding:2px 2px 10px;">{count} events loaded</div>',
+            f'<div style="font-size:11px;color:var(--muted);padding:2px 2px 6px;">{count} events loaded</div>',
             unsafe_allow_html=True,
         )
+        # When offline show a one-click shortcut to Settings → Calendar connect
+        if not is_online:
+            if st.button("🔗 Connect Calendar", key="sidebar_cal_connect_shortcut",
+                         use_container_width=True):
+                st.session_state.active_page = "settings"
+                st.rerun()
 
         # Navigation
         st.markdown('<span class="coo-sidebar-label">NAVIGATE</span>', unsafe_allow_html=True)
