@@ -3,6 +3,7 @@ import urllib.parse
 from datetime import datetime
 
 
+
 # ------------------------------------------------------------
 # CSS
 # ------------------------------------------------------------
@@ -17,35 +18,53 @@ def inject_css():
         /* ════════════════════════════════════════════════════════
            DESIGN TOKENS
            ════════════════════════════════════════════════════════ */
+        /* ── Design tokens: light mode (default) ── */
         :root {
-            color-scheme: light !important;
             --indigo-50:#eef2ff;  --indigo-100:#e0e7ff;
             --indigo-500:#6366f1; --indigo-600:#4f46e5; --indigo-700:#4338ca;
             --slate-50:#f8fafc;  --slate-100:#f1f5f9; --slate-200:#e2e8f0;
             --slate-400:#94a3b8; --slate-500:#64748b; --slate-700:#334155;
             --slate-800:#1e293b; --slate-900:#0f172a;
             --green:#10b981; --amber:#f59e0b; --red:#ef4444;
-            --bg:#f4f6f9; --surface:#ffffff;
-            --text:#0f172a; --muted:#64748b; --border:#e2e8f0;
+            --bg:#f4f6f9;        --surface:#ffffff;
+            --text:#0f172a;      --muted:#64748b;      --border:#e2e8f0;
+            --border-subtle:#eef2f7;
+            --input-bg:#ffffff;  --input-text:#0f172a; --input-border:#e2e8f0;
+            --card-bg:#ffffff;
+            --nav-default:#475569;
+            --chip-bg:#f8fafc;
             --sh-xs:0 1px 3px rgba(15,23,42,.07);
             --sh-sm:0 2px 8px rgba(15,23,42,.09),0 1px 3px rgba(15,23,42,.05);
             --sh-md:0 8px 24px rgba(15,23,42,.10),0 2px 8px rgba(15,23,42,.05);
             --sh-lg:0 16px 40px rgba(15,23,42,.12),0 4px 12px rgba(15,23,42,.06);
             --r-xs:6px; --r-sm:10px; --r-md:14px; --r-lg:20px; --r-xl:24px;
         }
-        html,body { color-scheme:light !important; }
+        /* ── Design tokens: dark mode — triggered by Streamlit's data-theme ── */
+        [data-theme="dark"] {
+            --bg:#0f172a;        --surface:#1e293b;
+            --text:#f1f5f9;      --muted:#94a3b8;      --border:#334155;
+            --border-subtle:#1e293b;
+            --input-bg:#1e293b;  --input-text:#f1f5f9; --input-border:#334155;
+            --card-bg:#1e293b;
+            --nav-default:#94a3b8;
+            --chip-bg:#1e293b;
+            --sh-xs:0 1px 3px rgba(0,0,0,.25);
+            --sh-sm:0 2px 8px rgba(0,0,0,.30);
+            --sh-md:0 8px 24px rgba(0,0,0,.35);
+            --sh-lg:0 16px 40px rgba(0,0,0,.40);
+        }
         * { font-family:Inter,system-ui,-apple-system,sans-serif; box-sizing:border-box; }
 
         /* ── App shell ── */
         .stApp { background:var(--bg) !important; color:var(--text) !important; }
-        #MainMenu,footer,header { visibility:hidden; }
+        #MainMenu,footer { visibility:hidden; }  /* keep header: hamburger ☰ must stay visible on mobile */
         section.main>div { padding-top:0 !important; }
         .block-container { max-width:1400px; padding:24px 40px 60px; }
         @media(max-width:1200px){ .block-container{ padding:20px 28px 60px; } }
         @media(max-width:900px) { .block-container{ padding:14px 18px 60px; } }
         /* Mobile: 90px bottom padding so content clears the fixed nav bar */
-        @media(max-width:768px) { .block-container{ padding:10px 12px 90px !important; } }
-        @media(max-width:640px) { .block-container{ padding:8px 10px 90px !important; } }
+        @media(max-width:768px) { .block-container{ padding:10px 12px 24px !important; } }
+        @media(max-width:640px) { .block-container{ padding:8px 10px 20px !important; } }
 
         /* ════════════════════════════════════════════════════════
            RESPONSIVE COLUMN STACKING
@@ -67,63 +86,61 @@ def inject_css():
         }
 
         /* ════════════════════════════════════════════════════════
-           LIGHT-MODE ENFORCEMENT (beats system dark-mode)
+           ADAPTIVE FORM ELEMENTS — respect dark/light theme
            ════════════════════════════════════════════════════════ */
         .stTextArea textarea {
-            background:#ffffff !important; color:#0f172a !important;
-            border:1.5px solid #e2e8f0 !important; border-radius:var(--r-md) !important;
+            background:var(--input-bg) !important; color:var(--input-text) !important;
+            border:1.5px solid var(--input-border) !important; border-radius:var(--r-md) !important;
             font-size:15px !important; line-height:1.6 !important;
             transition:border-color .15s,box-shadow .15s !important;
-            color-scheme:light !important;
         }
         .stTextArea textarea:focus {
             border-color:#6366f1 !important;
             box-shadow:0 0 0 3px rgba(99,102,241,.14) !important; outline:none !important;
         }
-        .stTextArea textarea::placeholder { color:#94a3b8 !important; }
+        .stTextArea textarea::placeholder { color:var(--muted) !important; }
         .stTextArea>div,.stTextArea>div>div { background:transparent !important; border:none !important; }
 
         .stTextInput input {
-            background:#ffffff !important; color:#0f172a !important;
-            border:1.5px solid #e2e8f0 !important; border-radius:var(--r-sm) !important;
+            background:var(--input-bg) !important; color:var(--input-text) !important;
+            border:1.5px solid var(--input-border) !important; border-radius:var(--r-sm) !important;
             font-size:14px !important; transition:border-color .15s,box-shadow .15s !important;
-            color-scheme:light !important;
         }
         .stTextInput input:focus {
             border-color:#6366f1 !important;
             box-shadow:0 0 0 3px rgba(99,102,241,.14) !important;
         }
-        .stTextInput input::placeholder { color:#94a3b8 !important; }
+        .stTextInput input::placeholder { color:var(--muted) !important; }
         .stTextInput>div>div { background:transparent !important; }
 
         .stCheckbox label,.stCheckbox label span,.stCheckbox label p {
-            color:#0f172a !important; font-size:13px !important;
+            color:var(--text) !important; font-size:13px !important;
         }
         div[data-testid="stChatMessage"] {
-            background:#f8fafc !important; border:1px solid #f0f4f8 !important;
+            background:var(--surface) !important; border:1px solid var(--border) !important;
             border-radius:var(--r-md) !important; padding:12px 16px !important;
-            margin-bottom:10px !important; color-scheme:light !important;
+            margin-bottom:10px !important;
         }
         div[data-testid="stChatMessage"] p,
         div[data-testid="stChatMessage"] span,
         div[data-testid="stChatMessage"] li,
-        div[data-testid="stChatMessage"] div { color:#0f172a !important; }
-        div[data-testid="stChatMessage"] code { background:#f1f5f9 !important; color:#4f46e5 !important; }
+        div[data-testid="stChatMessage"] div { color:var(--text) !important; }
+        div[data-testid="stChatMessage"] code { background:var(--surface) !important; color:#6366f1 !important; }
 
         .stAlert { border-radius:var(--r-sm) !important; }
-        /* Spinner — larger, centered, branded */
-        div[data-testid="stSpinner"] {
-            display:flex; align-items:center; justify-content:center;
-            padding:18px 0 !important;
-        }
+
+        /* ── Inline spinner (AI processing, checkin) — brand colour only.
+           No layout overrides: st.spinner() renders in the main content
+           column which is already wide. Only tint the ring and label. */
         div[data-testid="stSpinner"] > div {
-            border-top-color:#4f46e5 !important;
-            width:32px !important; height:32px !important;
-            border-width:3px !important;
+            border-top-color: #4f46e5 !important;
         }
         div[data-testid="stSpinner"] p {
-            color:#4f46e5 !important; font-weight:700 !important;
-            font-size:15px !important; margin-left:12px !important;
+            color: #4f46e5 !important;
+            font-weight: 700 !important;
+        }
+        [data-theme="dark"] div[data-testid="stSpinner"] p {
+            color: #818cf8 !important;
         }
         /* Status widget */
         div[data-testid="stStatus"] {
@@ -133,24 +150,24 @@ def inject_css():
         }
 
         .streamlit-expanderHeader {
-            background:#f8fafc !important; color:#0f172a !important;
+            background:var(--surface) !important; color:var(--text) !important;
             border-radius:var(--r-sm) !important; font-weight:700 !important;
         }
-        .streamlit-expanderContent { background:#ffffff !important; }
+        .streamlit-expanderContent { background:var(--surface) !important; }
 
         /* ════════════════════════════════════════════════════════
            GLOBAL BUTTONS
            ════════════════════════════════════════════════════════ */
         .stButton>button {
-            background:#ffffff !important; color:#0f172a !important;
-            border:1.5px solid #e2e8f0 !important; border-radius:var(--r-sm) !important;
+            background:var(--surface) !important; color:var(--text) !important;
+            border:1.5px solid var(--border) !important; border-radius:var(--r-sm) !important;
             font-weight:700 !important; font-size:14px !important;
             height:42px !important; letter-spacing:-0.01em !important;
             transition:background .14s,border-color .14s,box-shadow .14s,transform .08s !important;
             box-shadow:var(--sh-xs) !important;
         }
         .stButton>button:hover {
-            background:#f8fafc !important; border-color:#c7d2fe !important;
+            background:var(--bg) !important; border-color:#c7d2fe !important;
             color:#4338ca !important; box-shadow:var(--sh-sm) !important;
         }
         .stButton>button:active { transform:scale(.97) !important; }
@@ -172,8 +189,8 @@ def inject_css():
            SIDEBAR
            ════════════════════════════════════════════════════════ */
         section[data-testid="stSidebar"] {
-            background:#ffffff !important;
-            border-right:1px solid #eef2f7 !important;
+            background:var(--surface) !important;
+            border-right:1px solid var(--border-subtle) !important;
             box-shadow:3px 0 16px rgba(15,23,42,.06) !important;
         }
         section[data-testid="stSidebar"]>div {
@@ -206,12 +223,12 @@ def inject_css():
             font-size:14px !important; font-weight:600 !important;
             border-radius:var(--r-sm) !important;
             border:1.5px solid transparent !important;
-            background:transparent !important; color:#475569 !important;
+            background:transparent !important; color:var(--nav-default) !important;
             box-shadow:none !important; transition:all .14s !important;
         }
         section[data-testid="stSidebar"] .stButton>button:hover {
-            background:#f8fafc !important; border-color:#e2e8f0 !important;
-            color:#0f172a !important; box-shadow:var(--sh-xs) !important;
+            background:var(--chip-bg) !important; border-color:var(--border) !important;
+            color:var(--text) !important; box-shadow:var(--sh-xs) !important;
         }
         /* Active nav item via type=primary */
         section[data-testid="stSidebar"] button[data-testid="baseButton-primary"] {
@@ -241,7 +258,7 @@ def inject_css():
             text-transform:uppercase; letter-spacing:.08em;
             margin:16px 2px 6px; display:block;
         }
-        .coo-sidebar-divider { height:1px; background:#f1f5f9; margin:10px 2px; }
+        .coo-sidebar-divider { height:1px; background:var(--border-subtle); margin:10px 2px; }
         .coo-user-card {
             display:flex; align-items:center; gap:10px;
             padding:11px 13px; border-radius:var(--r-md);
@@ -254,12 +271,12 @@ def inject_css():
             background:var(--indigo-100); color:#3730a3;
             font-weight:900; font-size:13px;
         }
-        .coo-user-name { font-size:13px; font-weight:800; color:#0f172a; }
-        .coo-user-meta { font-size:11px; font-weight:600; color:#64748b; margin-top:1px; }
+        .coo-user-name { font-size:13px; font-weight:800; color:var(--text); }
+        .coo-user-meta { font-size:11px; font-weight:600; color:var(--muted); margin-top:1px; }
         .coo-status-row {
             display:flex; align-items:center; justify-content:space-between;
             padding:9px 12px; border-radius:var(--r-md);
-            border:1px solid var(--border); background:#ffffff;
+            border:1px solid var(--border); background:var(--surface);
             margin-bottom:4px; box-shadow:var(--sh-xs);
         }
         .coo-status-badge {
@@ -278,16 +295,16 @@ def inject_css():
         }
         .coo-greeting h2 {
             font-size:1.65rem; font-weight:900; letter-spacing:-.025em;
-            margin:0; color:#0f172a !important; line-height:1.2;
+            margin:0; color:var(--text) !important; line-height:1.2;
         }
-        .coo-greeting p { color:#64748b !important; margin:5px 0 0; font-size:15px; font-weight:500; }
+        .coo-greeting p { color:var(--muted) !important; margin:5px 0 0; font-size:15px; font-weight:500; }
         @media(max-width:640px){
             .coo-greeting h2 { font-size:1.2rem !important; }
             .coo-greeting p  { font-size:.82rem !important; margin-top:2px !important; }
         }
         .coo-header-date {
-            background:#ffffff; padding:8px 18px; border-radius:999px;
-            font-size:.85rem; font-weight:700; color:#475569;
+            background:var(--surface); padding:8px 18px; border-radius:999px;
+            font-size:.85rem; font-weight:700; color:var(--nav-default);
             box-shadow:var(--sh-sm); border:1px solid var(--border);
             white-space:nowrap; flex-shrink:0;
         }
@@ -304,9 +321,9 @@ def inject_css():
             .coo-metrics{ grid-template-columns:repeat(2,1fr); gap:8px; margin:8px 0 10px; }
         }
         .coo-metric-card {
-            background:#ffffff; padding:18px 20px;
+            background:var(--card-bg); padding:18px 20px;
             border-radius:var(--r-lg); box-shadow:var(--sh-sm);
-            border:1px solid #eef2f7;
+            border:1px solid var(--border-subtle);
             display:flex; justify-content:space-between; align-items:center;
             transition:box-shadow .18s,transform .12s;
         }
@@ -316,7 +333,7 @@ def inject_css():
             text-transform:uppercase; letter-spacing:.06em;
             margin-bottom:5px; display:block;
         }
-        .coo-metric-value { font-size:2rem; font-weight:900; color:#0f172a !important; line-height:1; }
+        .coo-metric-value { font-size:2rem; font-weight:900; color:var(--text) !important; line-height:1; }
         .coo-metric-icon {
             width:44px; height:44px; border-radius:12px; flex:0 0 auto;
             display:flex; align-items:center; justify-content:center;
@@ -341,8 +358,8 @@ def inject_css():
            HERO CARD  (Plan your day)
            ════════════════════════════════════════════════════════ */
         div[data-testid="stVerticalBlock"]:has(.coo-hero-marker) {
-            background:#ffffff !important;
-            border:1px solid #e8edf4; border-radius:var(--r-xl);
+            background:var(--card-bg) !important;
+            border:1px solid var(--border-subtle); border-radius:var(--r-xl);
             box-shadow:var(--sh-md); padding:24px; margin-top:12px;
         }
         @media(max-width:640px){
@@ -352,10 +369,10 @@ def inject_css():
             }
         }
         .coo-hero-title {
-            font-size:1.15rem; font-weight:900; color:#0f172a !important;
+            font-size:1.15rem; font-weight:900; color:var(--text) !important;
             margin:0 0 14px; display:flex; align-items:center; gap:8px;
         }
-        .coo-hero-divider { height:1px; background:#eef2f7; margin:20px 0 16px; }
+        .coo-hero-divider { height:1px; background:var(--border-subtle); margin:20px 0 16px; }
 
         /* ════════════════════════════════════════════════════════
            ACTION REQUIRED STRIP
@@ -402,11 +419,11 @@ def inject_css():
             }
         }
         .coo-checkin-feedback {
-            background:#f8fafc; border:1px solid #e2e8f0;
+            background:var(--chip-bg); border:1px solid var(--border);
             border-radius:var(--r-md); padding:14px; margin-top:10px;
             box-shadow:var(--sh-xs);
         }
-        .coo-checkin-feedback-title { font-weight:800; color:#0f172a !important; font-size:13px; margin-bottom:8px; }
+        .coo-checkin-feedback-title { font-weight:800; color:var(--text) !important; font-size:13px; margin-bottom:8px; }
 
         /* ════════════════════════════════════════════════════════
            ACTION ROW  (Scan | Reset | Execute)
@@ -425,7 +442,7 @@ def inject_css():
         }
 
         /* Train the Brain */
-        .coo-footer-label { font-weight:800; color:#334155 !important; font-size:13px; }
+        .coo-footer-label { font-weight:800; color:var(--text) !important; font-size:13px; }
         .coo-train-row>div[data-testid="stHorizontalBlock"] {
             display:flex !important; flex-direction:row !important;
             flex-wrap:nowrap !important; align-items:center !important; gap:8px !important;
@@ -450,28 +467,28 @@ def inject_css():
            ════════════════════════════════════════════════════════ */
         .coo-section-title {
             display:flex; align-items:center; gap:8px; font-weight:800;
-            color:#64748b !important; text-transform:uppercase;
+            color:var(--muted) !important; text-transform:uppercase;
             letter-spacing:.06em; font-size:.76rem; margin:14px 0 10px;
         }
         .coo-event-card {
-            background:#ffffff !important; border-radius:var(--r-md);
-            border:1px solid #eef2f7; box-shadow:var(--sh-sm);
+            background:var(--card-bg) !important; border-radius:var(--r-md);
+            border:1px solid var(--border-subtle); box-shadow:var(--sh-sm);
             padding:13px 15px; margin-bottom:10px;
             transition:box-shadow .16s,transform .1s;
         }
         .coo-event-card:hover { box-shadow:var(--sh-md); transform:translateY(-2px); }
         .coo-event-card.coo-draft {
-            background:#fafafa !important; border:2px dashed #c7d2fe;
+            background:var(--chip-bg) !important; border:2px dashed #c7d2fe;
             border-left:5px solid #4f46e5;
         }
         .coo-event-card.coo-upcoming { border-left:5px solid #10b981; }
-        .coo-evt-time  { font-size:12px; font-weight:700; color:#64748b !important; margin-bottom:3px; }
-        .coo-evt-title { font-size:14px; font-weight:900; color:#0f172a !important; line-height:1.3; }
+        .coo-evt-time  { font-size:12px; font-weight:700; color:var(--muted) !important; margin-bottom:3px; }
+        .coo-evt-title { font-size:14px; font-weight:900; color:var(--text) !important; line-height:1.3; }
         .coo-evt-loc   { font-size:12px; font-weight:500; color:#94a3b8 !important; margin-top:3px; }
         .coo-right-col-wrap { }
         @media(max-width:768px){
             .coo-right-col-wrap {
-                background:#ffffff; border:1px solid #e2e8f0;
+                background:var(--card-bg); border:1px solid var(--border);
                 border-radius:var(--r-lg); padding:14px 12px 10px;
                 margin-top:6px; box-shadow:var(--sh-sm);
             }
@@ -494,10 +511,10 @@ def inject_css():
 
             /* Chat messages */
             div[data-testid="stChatMessage"] { padding:10px 12px !important; }
-            div[data-testid="stChatMessage"] p { font-size:13px !important; color:#0f172a !important; }
+            div[data-testid="stChatMessage"] p { font-size:13px !important; color:var(--text) !important; }
 
             /* Textarea */
-            .stTextArea textarea { font-size:16px !important; min-height:90px !important; background:#f8fafc !important; }
+            .stTextArea textarea { font-size:16px !important; min-height:90px !important; background:var(--chip-bg) !important; }
             .stTextInput input   { font-size:16px !important; }
 
             /* Buttons */
@@ -684,7 +701,7 @@ def render_sidebar(status, count, on_start, on_clear, on_complete):
         bcls = "coo-status-badge" + ("" if is_online else " offline")
         st.markdown(
             f'<div class="coo-status-row">'
-            f'<span style="font-weight:700;font-size:13px;color:#0f172a;">🗓️ Calendar</span>'
+            f'<span style="font-weight:700;font-size:13px;color:var(--text);">🗓️ Calendar</span>'
             f'<div class="{bcls}">'
             f'<span style="width:6px;height:6px;border-radius:50%;background:{dot};display:inline-block;margin-right:3px;"></span>'
             f'{blbl}</div></div>'
@@ -1328,130 +1345,12 @@ def render_right_column(drafts, calendar, on_add, on_reject):
     st.markdown('</div>', unsafe_allow_html=True)  # close coo-right-col-wrap
 
 
-# ═══════════════════════════════════════════════════════════════════
-# MOBILE NAV  —  pure <a> anchor tag approach (final)
-#
-# WHY PREVIOUS APPROACHES FAILED:
-#   - st.components.v1.html iframe: window.parent.location.replace()
-#     throws a silent SecurityError on Streamlit Cloud because the
-#     iframe is served from a different subdomain (CORS block).
-#   - iframe CSS title selector: Streamlit changes iframe title attrs
-#     between versions (stHtml, components.v1.html, st_html) — selector
-#     never matched, nav rendered inline at top of page.
-#   - st.button/radio JS .click(): React synthetic events on
-#     visually-hidden elements don't propagate to Streamlit's root
-#     event container on mobile.
-#   - history.replaceState: Streamlit reads query_params from the
-#     WebSocket session URL, not the live browser URL bar.
-#
-# WHY <a> TAGS WORK:
-#   Standard browser anchor navigation (<a href="?page=X" target="_self">)
-#   has zero CORS restrictions, works on every browser/OS, and requires
-#   no JavaScript whatsoever. It causes a full page load which Streamlit
-#   reconnects normally. ?sid=, ?tz= are preserved in the URL.
-#   app.py reads ?page= on reconnect and sets active_page.
-# ═══════════════════════════════════════════════════════════════════
-
 
 def render_nav_triggers():
-    """No-op stub. Kept so app.py import doesn't break.
-    Navigation uses pure <a> anchor tags in render_mobile_nav()."""
+    """No-op. Navigation uses native Streamlit sidebar (hamburger ☰ on mobile)."""
     pass
 
 
 def render_mobile_nav():
-    """
-    Mobile top nav bar using pure HTML anchor tags.
-    No JavaScript, no iframes, no CORS issues.
-    Each tab is an <a href="?page=X&sid=Y&tz=Z" target="_self"> link.
-    Visible only on mobile (<=768px) via CSS media query.
-    """
-    import streamlit as st
-    import urllib.parse
-
-    active = st.session_state.get("active_page", "coo")
-
-    TABS = [
-        ("coo",       "🏠", "Home"),
-        ("dashboard", "📊", "Dash"),
-        ("calendar",  "🗓️", "Cal"),
-        ("memory",    "🧠", "Brain"),
-        ("settings",  "⚙️",  "More"),
-    ]
-
-    # Carry all existing query params (sid, tz, etc.) forward so auth
-    # and timezone survive the navigation reload.
-    try:
-        base_params = dict(st.query_params)
-    except Exception:
-        base_params = {}
-    # Remove stale page param — we'll set it fresh per tab
-    base_params.pop("page", None)
-
-    tab_html = []
-    for page_id, icon, label in TABS:
-        active_cls = "active" if active == page_id else ""
-        params = {**base_params, "page": page_id}
-        href = "?" + urllib.parse.urlencode(params, doseq=True)
-        tab_html.append(
-            f'<a href="{href}" target="_self" class="coo-mob-tab {active_cls}">'
-            f'<span class="coo-mob-icon">{icon}</span>'
-            f'<span class="coo-mob-label">{label}</span>'
-            f'</a>'
-        )
-
-    st.markdown(
-        f"""
-        <style>
-        /* ── Mobile top nav container ── */
-        .coo-mobile-nav-container {{
-            display: none;                  /* hidden on desktop */
-            position: fixed;
-            top: 0; left: 0; right: 0;      /* Pinned to the top */
-            height: 62px;
-            background: rgba(255,255,255,0.97);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border-bottom: 1px solid #e2e8f0; /* Border moved to bottom */
-            box-shadow: 0 4px 20px rgba(15,23,42,0.08); /* Shadow pointing down */
-            z-index: 2147483647;
-            justify-content: space-around;
-            align-items: stretch;
-        }}
-        @media (max-width: 768px) {{
-            .coo-mobile-nav-container {{
-                display: flex !important;
-            }}
-            .block-container {{
-                padding-top: 80px !important;    /* Push app content down */
-                padding-bottom: 20px !important; /* Clean up bottom space */
-            }}
-        }}
-
-        /* ── Tab link styles ── */
-        a.coo-mob-tab {{
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            flex: 1; text-decoration: none;
-            gap: 3px; padding: 8px 4px 6px;
-            color: #94a3b8;
-            font-family: Inter, system-ui, sans-serif;
-            -webkit-tap-highlight-color: transparent;
-            transition: background 0.15s, color 0.15s;
-            border-radius: 10px; margin: 3px;
-        }}
-        a.coo-mob-tab.active {{
-            color: #4f46e5;
-            background: #eef2ff;
-        }}
-        a.coo-mob-tab:active {{ transform: scale(0.92); }}
-        a.coo-mob-tab .coo-mob-icon  {{ font-size: 20px; line-height: 1; }}
-        a.coo-mob-tab .coo-mob-label {{ font-size: 10px; font-weight: 700; letter-spacing: 0.01em; }}
-        </style>
-
-        <div class="coo-mobile-nav-container">
-            {"".join(tab_html)}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """No-op. Navigation uses native Streamlit sidebar (hamburger ☰ on mobile)."""
+    pass

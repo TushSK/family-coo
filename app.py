@@ -58,8 +58,6 @@ st.set_page_config(
 # -----------------------
 init_state()
 inject_css()
-render_mobile_nav()  # fixed bottom nav + FAB (mobile only)
-
 # -----------------------
 # QUERY PARAM HELPERS (sid)
 # -----------------------
@@ -244,11 +242,11 @@ if st.session_state.get("user_tz"):
         pass
 
 # -----------------------
-# CALENDAR AUTO-REFRESH (with loading indicator)
+# CALENDAR AUTO-REFRESH (silent — spinner here renders top-left before layout)
+# Status is shown in the sidebar via Online/Offline badge.
 # -----------------------
 if st.session_state.get("user_email") and st.session_state.get("calendar_events") is None:
-    with st.spinner("📅 Loading your calendar…"):
-        refresh_calendar()
+    refresh_calendar()
 
 # -----------------------
 # SIDEBAR
@@ -285,12 +283,8 @@ if _qp_tz and not st.session_state.get("user_tz"):
     st.session_state.user_tz = _qp_tz
     st.session_state.calendar_events = None  # force re-fetch with correct TZ
 
-# Navigation: pure anchor-tag nav (no JS, no iframes, no CORS issues).
-# render_mobile_nav() injects <a href="?page=X&sid=Y&tz=Z"> links.
-# On tap, browser reloads → Streamlit reconnects → ?page= read above.
 _active_page = st.session_state.get("active_page", "coo")
-
-render_nav_triggers()  # no-op stub
+render_nav_triggers()  # no-op stub — sidebar handles navigation on all devices
 
 if _active_page != "coo":
     from src.utils import get_pending_review as _gpr, _read_json, MISSION_FILE, MEMORY_FILE
@@ -306,6 +300,16 @@ if _active_page != "coo":
         _memory_rows = _read_json(MEMORY_FILE)
     except Exception:
         _memory_rows = []
+    _page_labels = {
+        "dashboard": "📊 Loading Dashboard…",
+        "calendar":  "🗓️ Loading Calendar…",
+        "memory":    "🧠 Loading Memory Bank…",
+        "settings":  "⚙️ Loading Settings…",
+    }
+    _spinner_msg = _page_labels.get(_active_page, "⏳ Loading…")
+    # st.toast renders as a floating bottom-right notification — completely
+    # outside the widget tree, no layout context needed, no narrow-column bug.
+    st.toast(_spinner_msg)
     _render_page(
         _active_page,
         calendar_events=(
