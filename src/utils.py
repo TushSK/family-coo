@@ -11,6 +11,39 @@ MEMORY_FILE = "memory/feedback_log.json"
 MISSION_FILE = "memory/mission_log.json"
 
 
+# -----------------------
+# ACTIVE USER — per-user data isolation
+# Call set_active_user(email) after login and on every render.
+# All utils functions read MEMORY_FILE / MISSION_FILE from module globals,
+# so redirecting these two paths is the only change needed.
+# -----------------------
+def set_active_user(user_id: str) -> None:
+    """
+    Point MEMORY_FILE and MISSION_FILE at the authenticated user's private
+    folder so that missions, feedback and check-ins are never shared across
+    users.
+
+    Folder layout:
+        memory/users/<safe_email>/feedback_log.json
+        memory/users/<safe_email>/mission_log.json
+
+    Falls back to the shared legacy files when user_id is empty (e.g. local
+    dev without auth) so existing behaviour is unchanged.
+    """
+    global MEMORY_FILE, MISSION_FILE
+    uid = (user_id or "").strip().lower()
+    if not uid:
+        # No authenticated user — keep shared defaults (dev/local mode)
+        MEMORY_FILE = "memory/feedback_log.json"
+        MISSION_FILE = "memory/mission_log.json"
+        return
+    safe = _safe_user_key(uid)
+    user_dir = os.path.join("memory", "users", safe)
+    os.makedirs(user_dir, exist_ok=True)
+    MEMORY_FILE  = os.path.join(user_dir, "feedback_log.json")
+    MISSION_FILE = os.path.join(user_dir, "mission_log.json")
+
+
 # --- NEW: per-user memory folder (Layer B) ---
 USER_MEMORY_DIR = "memory/users"
 

@@ -206,6 +206,17 @@ if not st.session_state.get("authenticated"):
     st.stop()
 
 # -----------------------
+# ACTIVE USER — re-point per-user data files on every render.
+# Streamlit Cloud restarts wipe module globals; re-applying from session_state
+# ensures MISSION_FILE / MEMORY_FILE always point to the right user folder.
+# -----------------------
+try:
+    from src.utils import set_active_user as _set_active_user
+    _set_active_user(st.session_state.get("user_email", ""))
+except Exception:
+    pass
+
+# -----------------------
 # TIMEZONE — set on every render so _DISPLAY_TZ global survives process restarts
 # Streamlit Cloud may restart the Python process; module globals reset to None.
 # Re-applying from session_state on every render guarantees correct event times.

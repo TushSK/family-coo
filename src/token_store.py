@@ -232,12 +232,37 @@ def supabase_verify_otp(st, email: str, otp_code: str) -> tuple[bool, str, dict]
 # ------------------------------------------------------------
 APP_SESSION_PROVIDER = "app_session_v1"
 
+# Local file-based session store (used when Supabase is not configured).
+# Keeps a JSON dict of {sid: {email, created_at}} in memory/sessions.json.
+import os as _os
+
+_SESSION_FILE = "memory/sessions.json"
+
+def _local_read_sessions() -> dict:
+    try:
+        _os.makedirs("memory", exist_ok=True)
+        if not _os.path.exists(_SESSION_FILE):
+            return {}
+        with open(_SESSION_FILE, "r", encoding="utf-8") as _f:
+            d = json.load(_f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _local_write_sessions(data: dict) -> None:
+    try:
+        _os.makedirs("memory", exist_ok=True)
+        with open(_SESSION_FILE, "w", encoding="utf-8") as _f:
+            json.dump(data, _f)
+    except Exception:
+        pass
+
+
 def create_app_session(st, email: str) -> str:
     """
-    Creates a stable session id stored in Supabase user_tokens table:
-      user_id = sid
-      provider = app_session_v1
-      token_json = {"email":..., "created_at":...}
+    Creates a stable session id.
+    Primary: Supabase user_tokens table.
+    Fallback: local memory/sessions.json (works with no Supabase config).
     """
     email = (email or "").strip().lower()
     if not email:
@@ -248,16 +273,36 @@ def create_app_session(st, email: str) -> str:
         "email": email,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    ok = supabase_upsert_token(st, sid, token_json, provider=APP_SESSION_PROVIDER)
-    return sid if ok else ""
+
+    # Try Supabase first
+    if _supabase_cfg(st):
+        ok = supabase_upsert_token(st, sid, token_json, provider=APP_SESSION_PROVIDER)
+        if ok:
+            return sid
+
+    # Fallback: local file session store
+    sessions = _local_read_sessions()
+    sessions[sid] = token_json
+    _local_write_sessions(sessions)
+    return sid
 
 
 def load_app_session(st, sid: str) -> dict:
     """
     Loads {"email":...} from app session sid.
+    Tries Supabase first, falls back to local file store.
     """
     sid = (sid or "").strip()
     if not sid:
         return {}
-    tok = supabase_get_token(st, sid, provider=APP_SESSION_PROVIDER)
-    return tok if isinstance(tok, dict) else {}
+
+    # Try Supabase first
+    if _supabase_cfg(st):
+        tok = supabase_get_token(st, sid, provider=APP_SESSION_PROVIDER)
+        if isinstance(tok, dict) and tok.get("email"):
+            return tok
+
+    # Fallback: local file session store
+    sessions = _local_read_sessions()
+    entry = sessions.get(sid, {})
+    return entry if isinstance(entry, dict) else {}
