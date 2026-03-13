@@ -2223,19 +2223,46 @@ def _render_settings(user_email="", user_name="", **_):
 
                 col1, col2 = st.columns([1, 1])
                 with col1:
-                    if st.button("✅ Done — I entered the code", key="settings_cal_done", type="primary", use_container_width=True):
-                        with st.spinner("Verifying…"):
-                            ok, msg = complete_reconnect()
-                        if ok:
-                            st.success(msg)
+                    if st.button("&#x2705; Done &#x2014; I entered the code", key="settings_cal_done", type="primary", use_container_width=True):
+                        # Auto-retry up to 6 times (~30 s) so user doesn't have to click repeatedly
+                        _spinner_slot = st.empty()
+                        _status_slot  = st.empty()
+                        _connected    = False
+                        _last_msg     = ""
+                        import time as _time
+                        for _attempt in range(6):
+                            _spinner_slot.info(f"&#x1F504; Checking with Google… (attempt {_attempt + 1}/6)")
+                            _ok, _msg = complete_reconnect()
+                            _last_msg = _msg
+                            if _ok:
+                                _connected = True
+                                break
+                            if "authorization_pending" in _msg or "slow_down" in _msg:
+                                _time.sleep(4)   # wait before next poll
+                                continue
+                            # Any other error (expired, access_denied, etc.) — stop immediately
+                            break
+                        _spinner_slot.empty()
+                        if _connected:
                             st.session_state["device_flow"] = None
+                            _status_slot.success("&#x2705; Calendar connected! Loading events…")
+                            _time.sleep(1)
                             st.rerun()
-                        elif "authorization_pending" in msg or "slow_down" in msg:
-                            st.warning("Still waiting — Google hasn't confirmed yet. Wait a moment and try again.")
+                        elif "authorization_pending" in _last_msg or "slow_down" in _last_msg:
+                            _status_slot.warning(
+                                "Google hasn't confirmed the code yet. "
+                                "Make sure you entered the code at the link above, then click Done again."
+                            )
+                        elif "access_denied" in _last_msg:
+                            _status_slot.error(
+                                "&#x274C; Access was denied. "
+                                "Please click **Connect Google Calendar** again and approve all permissions."
+                            )
+                            st.session_state["device_flow"] = None
                         else:
-                            st.error(f"Auth failed: {msg}")
+                            _status_slot.error(f"&#x274C; Auth failed: {_last_msg}")
                 with col2:
-                    if st.button("✖ Cancel", key="settings_cal_cancel", use_container_width=True):
+                    if st.button("&#x2716; Cancel", key="settings_cal_cancel", use_container_width=True):
                         st.session_state["device_flow"] = None
                         st.rerun()
 

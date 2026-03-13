@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 import anthropic
 from groq import Groq
+import os
 
 # ---------------------------------------------------------------------------
 # Model constants — change ONLY here to upgrade or swap
@@ -52,9 +53,18 @@ class LLMRouter:
         text = router.call("brain",  system=sys_prompt, user=user_msg, image_b64=b64str)
     """
 
-    def __init__(self, anthropic_key: str, groq_key: str) -> None:
-        self._claude = anthropic.Anthropic(api_key=anthropic_key)
-        self._groq   = Groq(api_key=groq_key) if groq_key else None
+    def __init__(self, anthropic_key: str = "", groq_key: str = "", keys: Optional[dict] = None):
+        # Support both calling styles:
+        # 1. LLMRouter(anthropic_key="...", groq_key="...")  ← brain.py uses this
+        # 2. LLMRouter(keys={"ANTHROPIC_API_KEY": "..."})    ← legacy style
+        _k = keys or {}
+        self.anthropic_key = anthropic_key or _k.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
+        self.groq_key      = groq_key      or _k.get("GROQ_API_KEY")      or os.getenv("GROQ_API_KEY", "")
+
+        self._anthropic = anthropic.Anthropic(api_key=self.anthropic_key)
+        self._claude = self._anthropic  
+        self._groq      = Groq(api_key=self.groq_key)
+
 
     # ------------------------------------------------------------------
     # Public API

@@ -152,14 +152,30 @@ def get_calendar_service(user_id: Optional[str] = None):
 
     creds = _build_creds_from_token_dict(token_dict) if token_dict else None
 
-    # Refresh if needed
+    # If the stored token has no expiry (old format), force a proactive refresh
+    # so we get a valid expiry and the library knows when to re-refresh.
+    if creds and creds.refresh_token and creds.expiry is None:
+        try:
+            creds.refresh(Request())
+            refreshed = json.loads(creds.to_json())
+            if user_id:
+                _save_token_to_supabase(user_id, refreshed)
+                _save_token_to_local_for_user(user_id, refreshed)
+            else:
+                _save_token_to_local(refreshed)
+        except Exception:
+            pass   # keep going with the existing token if refresh fails
+
+    # Refresh if needed (token expired or about to expire)
     if creds and (not creds.valid):
         if creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
                 refreshed = json.loads(creds.to_json())
+                # Always try both stores so testers without Supabase stay connected
                 if user_id:
                     _save_token_to_supabase(user_id, refreshed)
+                    _save_token_to_local_for_user(user_id, refreshed)   # ← local fallback
                 else:
                     _save_token_to_local(refreshed)
             except Exception:
@@ -318,13 +334,18 @@ def save_token_from_device_flow(user_id: str, token_response: Dict[str, Any]) ->
     if not cfg:
         return False, "Missing google_oauth.client_id in secrets."
 
+    # Compute absolute expiry from expires_in so the library knows when to refresh
+    _expires_in = int(token_response.get("expires_in") or 3600)
+    _expiry_dt  = datetime.now(timezone.utc) + timedelta(seconds=_expires_in - 60)
+
     token_dict = {
-        "token": token_response.get("access_token"),
+        "token":         token_response.get("access_token"),
         "refresh_token": token_response.get("refresh_token"),
-        "token_uri": GOOGLE_TOKEN_URL,
-        "client_id": cfg["client_id"],
+        "token_uri":     GOOGLE_TOKEN_URL,
+        "client_id":     cfg["client_id"],
         "client_secret": cfg.get("client_secret", ""),
-        "scopes": SCOPES,
+        "scopes":        SCOPES,
+        "expiry":        _expiry_dt.isoformat(),   # ← critical: enables auto-refresh
     }
 
     # Try Supabase first
