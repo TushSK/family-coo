@@ -12,5 +12,7 @@ __pycache__/
 env/
 
 memory/
-*.json
+node_modules/
 gcal_token.json
+*_token.json
+package-lock.json
