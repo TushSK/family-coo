@@ -43,18 +43,17 @@ PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 SECRETS_PATH  = PROJECT_ROOT / ".streamlit" / "secrets.toml"
 sys.path.insert(0, str(PROJECT_ROOT))
 
-PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 
 def _load_secrets() -> dict:
+    """Local dev only — on Render, env vars take priority."""
     try:
-        import tomllib
-        p = PROJECT_ROOT / ".streamlit" / "secrets.toml"
-        if p.exists():
-            with p.open("rb") as f:
+        if SECRETS_PATH.exists():
+            with SECRETS_PATH.open("rb") as f:
                 return tomllib.load(f)
     except Exception:
         pass
     return {}
+
 
 _SECRETS = _load_secrets()
 _SB      = _SECRETS.get("supabase", {})
@@ -62,13 +61,18 @@ _KEYS    = _SECRETS.get("keys", {})
 _GENERAL = _SECRETS.get("general", {})
 _GOAUTH  = _SECRETS.get("google_oauth", {})
 
-def _secret(env_key, *toml_keys, section={}):
+
+def _secret(env_key: str, *toml_keys: str, section: dict = {}) -> str:
+    """Env var first, secrets.toml fallback for local dev."""
     val = os.getenv(env_key, "")
-    if val: return val
+    if val:
+        return val
     for k in toml_keys:
         val = section.get(k, "")
-        if val: return val
+        if val:
+            return val
     return ""
+
 
 SUPABASE_URL         = _secret("SUPABASE_URL",         "url",               section=_SB).rstrip("/")
 SUPABASE_SERVICE_KEY = _secret("SUPABASE_SERVICE_KEY", "service_role_key",  section=_SB)
@@ -76,8 +80,6 @@ ANTHROPIC_KEY        = _secret("ANTHROPIC_API_KEY",    "ANTHROPIC_API_KEY", sect
 GROQ_KEY             = _secret("GROQ_API_KEY",         "GROQ_API_KEY",      section=_KEYS) or _GENERAL.get("groq_api_key", "")
 GCAL_CLIENT_ID       = _secret("GOOGLE_CLIENT_ID",     "client_id",         section=_GOAUTH)
 GCAL_CLIENT_SECRET   = _secret("GOOGLE_CLIENT_SECRET", "client_secret",     section=_GOAUTH)
-
-
 
 # -- Supabase client (singleton) ----------------------------------------------
 from supabase import create_client, Client as SupabaseClient
