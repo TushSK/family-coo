@@ -2,14 +2,22 @@ services:
   - type: web
     name: family-coo-api
     runtime: python
+    region: oregon
+    plan: free
+
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+
     envVars:
       - key: ANTHROPIC_API_KEY
-        sync: false       # set manually in Render dashboard
+        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
         sync: false
