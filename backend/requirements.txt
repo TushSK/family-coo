@@ -1,0 +1,22 @@
+# Family COO — Backend Requirements
+# Install with: pip install -r requirements.txt
+
+# ── Web framework ─────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# ── Supabase ──────────────────────────────────────────────────
+supabase==2.15.0
+
+# ── LLM Providers (already in your existing env) ─────────────
+anthropic>=0.40.0
+groq>=0.13.0
+
+# ── Google Calendar ───────────────────────────────────────────
+google-auth>=2.38.0
+google-auth-oauthlib>=1.2.1
+google-api-python-client>=2.160.0
+
+# ── Utilities (already used by brain.py / utils.py) ───────────
+python-dateutil>=2.9.0
+Pillow>=10.0.0
