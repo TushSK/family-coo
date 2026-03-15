@@ -4,9 +4,9 @@ import {
   View, Text, TouchableOpacity, ScrollView, TextInput,
   StyleSheet, SafeAreaView, Platform,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
-import { C, R, S, USER_ID, API_BASE, STORAGE_KEYS } from "../constants/config";
+import { C, R, S, USER_ID, API_BASE } from "../constants/config";
+import { useAuth } from "../context/AuthContext";
 
 type Step = 1|2|3|4|5|6; // 6 = summary
 
@@ -120,6 +120,7 @@ function ProgressDots({ step }: { step:number }) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function OnboardScreen() {
   const router = useRouter();
+  const { markOnboard } = useAuth();
   const [step, setStep] = useState<Step>(1);
   const [p, setP] = useState<Profile>({...DEFAULT});
 
@@ -145,7 +146,7 @@ export default function OnboardScreen() {
   }
 
   async function finish() {
-    // Save profile (best effort)
+    // Save profile to backend (best effort)
     try {
       await fetch(`${API_BASE}/api/memory/profile`, {
         method:"POST",
@@ -153,10 +154,9 @@ export default function OnboardScreen() {
         body:JSON.stringify({ user_id:USER_ID, profile:p }),
       });
     } catch {}
-    // Mark onboarding complete BEFORE navigating so root layout sees it
-    await AsyncStorage.setItem(STORAGE_KEYS.onboardDone, "1");
-    // Small tick to let AsyncStorage flush, then navigate
-    setTimeout(() => router.replace("/(tabs)"), 80);
+    // markOnboard writes AsyncStorage AND updates AuthContext state
+    // AuthGate in _layout.tsx detects auth="app" and redirects — no setTimeout needed
+    await markOnboard();
   }
 
   // ── Splash ─────────────────────────────────────────────────────────────────
