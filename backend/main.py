@@ -123,16 +123,37 @@ def _get_gcal_service(user_id: str):
         if isinstance(token_data, str):
             token_data = json.loads(token_data)
 
-        google_cfg = _SECRETS.get("google_oauth", {})
+        # Env vars take priority on Render; fall back to secrets.toml locally
+        google_cfg    = _SECRETS.get("google_oauth", {})
+        client_id     = os.environ.get("GOOGLE_CLIENT_ID")     or google_cfg.get("client_id", "")
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or google_cfg.get("client_secret", "")
+
         creds = Credentials(
             token=token_data.get("token"),
             refresh_token=token_data.get("refresh_token"),
             token_uri="https://oauth2.googleapis.com/token",
-            client_id=google_cfg.get("client_id", ""),
-            client_secret=google_cfg.get("client_secret", ""),
+            client_id=client_id,
+            client_secret=client_secret,
         )
         if creds.expired and creds.refresh_token:
             creds.refresh(GRequest())
+            # Persist refreshed token back to Supabase
+            try:
+                import json as _j
+                refreshed = _j.loads(creds.to_json())
+                patch_url = (f"{SUPABASE_URL}/rest/v1/user_tokens"
+                             f"?user_id=eq.{q_user}&provider=eq.{q_provider}")
+                patch_req = urlreq.Request(patch_url,
+                    data=_j.dumps({"token_json": refreshed}).encode(),
+                    headers={
+                        "apikey": SUPABASE_SERVICE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal",
+                    }, method="PATCH")
+                urlreq.urlopen(patch_req, timeout=5)
+            except Exception:
+                pass
 
         return build("calendar", "v3", credentials=creds, cache_discovery=False)
     except Exception:
