@@ -311,7 +311,7 @@ def _gcal_upcoming(service) -> list:
 
 # -- routes -------------------------------------------------------------------
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok", "service": "Family COO API v2"}
 
