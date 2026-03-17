@@ -94,6 +94,14 @@ export default function CalendarScreen() {
   const [actVal,     setActVal]     = useState("family-outing");
   const [genDone,    setGenDone]    = useState(false);
   const [showAdd,    setShowAdd]    = useState(false);
+  const [showSignals,setShowSignals] = useState(false);
+  const [signals, setSignals] = useState({
+    slot:"Saturday 9:00 AM – 1:00 PM",
+    radius:"30",
+    budget:"Under $50",
+    energy:"Moderate",
+    kidFriendly:"Yes — Drishti is coming",
+  });
   const [chatCtx,    setChatCtx]    = useState<{title:string;ctx:string}|null>(null);
 
   const calRes = useGet<{events:Ev[]}>(`/api/calendar?user_id=${USER_ID}`);
@@ -228,7 +236,7 @@ export default function CalendarScreen() {
           {/* Context strip */}
           <View style={st.plannerCtx}>
             <Text style={st.plannerCtxLabel}>CURRENT CONTEXT</Text>
-            {[["⏰","Saturday 9:00 AM – 1:00 PM"],["🌍","Travel radius: 30 miles"],["☀️","Sunny, 78°F"]].map(([e,t])=>(
+            {[["⏰",signals.slot],["🌍",`Travel radius: ${signals.radius} miles`],["☀️","Sunny, 78°F"]].map(([e,t])=>(
               <View key={t} style={{flexDirection:"row",alignItems:"center",gap:8,marginBottom:4}}>
                 <Text style={{fontSize:13}}>{e}</Text>
                 <Text style={st.plannerCtxText}>{t}</Text>
@@ -255,7 +263,7 @@ export default function CalendarScreen() {
               <TouchableOpacity style={[st.genBtn,S.sm,{flex:2}]} onPress={()=>setGenDone(true)}>
                 <Text style={st.genBtnText}>Generate options</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[st.signalsBtn,{flex:1}]}>
+              <TouchableOpacity style={[st.signalsBtn,{flex:1}]} onPress={()=>setShowSignals(true)}>
                 <Text style={st.signalsBtnText}>Edit signals</Text>
               </TouchableOpacity>
             </View>
@@ -351,6 +359,84 @@ export default function CalendarScreen() {
 
         <View style={{height:32}}/>
       </ScrollView>
+
+      {/* Edit Signals Modal */}
+      <Modal visible={showSignals} animationType="slide" transparent>
+        <View style={st.modalOverlay}>
+          <View style={st.signalsSheet}>
+            <View style={st.sheetHandle}/>
+            <View style={{flexDirection:"row",alignItems:"center",marginBottom:18}}>
+              <View style={{flex:1}}>
+                <Text style={st.modalSub}>WEEKEND PLANNER</Text>
+                <Text style={st.modalTitle}>Edit Planning Signals</Text>
+              </View>
+              <TouchableOpacity style={st.modalBack} onPress={()=>setShowSignals(false)}>
+                <Ionicons name="close" size={18} color={C.ink2}/>
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Time slot */}
+              <Text style={st.fieldLabel}>PREFERRED TIME SLOT</Text>
+              <View style={st.signalsPickerWrap}>
+                {["Saturday 9:00 AM – 1:00 PM","Saturday 2:00 PM – 6:00 PM","Sunday 9:00 AM – 1:00 PM","Sunday 2:00 PM – 6:00 PM","Full Saturday","Full Sunday"].map(o=>(
+                  <TouchableOpacity key={o}
+                    style={[st.sigChip, signals.slot===o&&st.sigChipSel]}
+                    onPress={()=>setSignals(s=>({...s,slot:o}))}>
+                    <Text style={[st.sigChipText, signals.slot===o&&{color:C.acc,fontWeight:"700"}]}>{o}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {/* Travel radius */}
+              <Text style={[st.fieldLabel,{marginTop:14}]}>TRAVEL RADIUS</Text>
+              <View style={st.signalsPickerWrap}>
+                {[["10","Local only"],["20","Up to 20 mi"],["30","Day trip"],["50","Extended"],["100","Road trip"]].map(([v,l])=>(
+                  <TouchableOpacity key={v}
+                    style={[st.sigChip, signals.radius===v&&st.sigChipSel]}
+                    onPress={()=>setSignals(s=>({...s,radius:v}))}>
+                    <Text style={[st.sigChipText, signals.radius===v&&{color:C.acc,fontWeight:"700"}]}>{l} ({v} mi)</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {/* Budget */}
+              <Text style={[st.fieldLabel,{marginTop:14}]}>BUDGET RANGE</Text>
+              <View style={st.signalsPickerWrap}>
+                {["Free","Under $50","$50–$150","$150–$300","No limit"].map(o=>(
+                  <TouchableOpacity key={o}
+                    style={[st.sigChip, signals.budget===o&&st.sigChipSel]}
+                    onPress={()=>setSignals(s=>({...s,budget:o}))}>
+                    <Text style={[st.sigChipText, signals.budget===o&&{color:C.acc,fontWeight:"700"}]}>{o}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {/* Energy */}
+              <Text style={[st.fieldLabel,{marginTop:14}]}>ENERGY LEVEL</Text>
+              <View style={st.signalsPickerWrap}>
+                {["Relaxed","Moderate","Active & adventurous"].map(o=>(
+                  <TouchableOpacity key={o}
+                    style={[st.sigChip, signals.energy===o&&st.sigChipSel]}
+                    onPress={()=>setSignals(s=>({...s,energy:o}))}>
+                    <Text style={[st.sigChipText, signals.energy===o&&{color:C.acc,fontWeight:"700"}]}>{o}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {/* Kid friendly */}
+              <Text style={[st.fieldLabel,{marginTop:14}]}>KID-FRIENDLY</Text>
+              <View style={st.signalsPickerWrap}>
+                {["Yes — Drishti is coming","No — adults only"].map(o=>(
+                  <TouchableOpacity key={o}
+                    style={[st.sigChip, signals.kidFriendly===o&&st.sigChipSel]}
+                    onPress={()=>setSignals(s=>({...s,kidFriendly:o}))}>
+                    <Text style={[st.sigChipText, signals.kidFriendly===o&&{color:C.acc,fontWeight:"700"}]}>{o}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity style={[st.genBtn,{marginTop:18,marginBottom:8}]} onPress={()=>setShowSignals(false)}>
+                <Text style={st.genBtnText}>Save Signals ✓</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Add event modal */}
       <Modal visible={showAdd} animationType="slide" presentationStyle="pageSheet">
@@ -484,4 +570,11 @@ const st = StyleSheet.create({
   fieldInput:     {borderWidth:0.5,borderColor:C.border2,borderRadius:R.lg,paddingHorizontal:13,paddingVertical:11,fontSize:14,color:C.ink,backgroundColor:C.bgCard},
   memberPill:     {paddingHorizontal:14,paddingVertical:8,borderRadius:R.full,borderWidth:0.5,borderColor:C.border,backgroundColor:C.bgCard},
   memberPillText: {fontSize:13,color:C.ink2,fontWeight:"500"},
+  modalOverlay:   {flex:1,backgroundColor:"rgba(0,0,0,0.45)",justifyContent:"flex-end",...(Platform.OS==="web"?{position:"fixed" as any,top:0,left:0,right:0,bottom:0,zIndex:999}:{})},
+  signalsSheet:   {backgroundColor:C.bgCard,borderTopLeftRadius:22,borderTopRightRadius:22,padding:20,paddingBottom:Platform.OS==="ios"?36:24,maxHeight:"85%"},
+  sheetHandle:    {width:40,height:4,borderRadius:2,backgroundColor:C.border2,alignSelf:"center",marginBottom:12},
+  sigChip:        {paddingHorizontal:13,paddingVertical:8,borderRadius:R.full,borderWidth:0.5,borderColor:C.border2,backgroundColor:C.bg2,marginBottom:7,marginRight:7},
+  sigChipSel:     {borderColor:C.acc,backgroundColor:C.soft},
+  sigChipText:    {fontSize:13,color:C.ink2,fontWeight:"600"},
+  signalsPickerWrap:{flexDirection:"row",flexWrap:"wrap"},
 });

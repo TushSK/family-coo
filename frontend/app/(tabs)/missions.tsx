@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator,
   StyleSheet, SafeAreaView, RefreshControl, Platform, Dimensions, TextInput,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -107,6 +108,9 @@ export default function MissionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showAll,    setShowAll]    = useState(false);
   const [ideaDraft,  setIdeaDraft]  = useState("");
+  const [feedback,   setFeedback]   = useState<{missionId:string;title:string}|null>(null);
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [feedbackReason, setFeedbackReason] = useState("");
   const [localIdeas, setLocalIdeas] = useState<string[]>([]);
 
   const res = useGet<{missions:Mission[]}>(`/api/missions?user_id=${USER_ID}&status=${filter}`);
@@ -121,9 +125,33 @@ export default function MissionsScreen() {
   const handleComplete=async(id:string)=>{
     try { await apiPost(`/api/missions/${id}/complete`,{}); res.refetch(); } catch {}
   };
-  const handleSnooze=async(id:string)=>{
+  const handleSnooze=(id:string)=>{
+    const mission = missions.find(m=>m.id===id);
+    setFeedbackNote("");
+    setFeedbackReason("");
+    setFeedback({missionId:id, title:mission?.title||"this mission"});
+  };
+
+  const submitFeedback=async()=>{
+    if(!feedback) return;
     const until=new Date(Date.now()+86400000).toISOString();
-    try { await apiPost(`/api/missions/${id}/snooze`,{snoozed_until:until}); res.refetch(); } catch {}
+    try {
+      await apiPost(`/api/missions/${feedback.missionId}/snooze`,{
+        snoozed_until:until,
+        feedback_note:feedbackNote,
+        reason:feedbackReason,
+      });
+      // Also log feedback
+      await apiPost("/api/feedback",{
+        user_id: USER_ID,
+        mission_id: feedback.missionId,
+        feedback_type:"skipped",
+        reason: feedbackReason,
+        note: feedbackNote,
+      });
+      res.refetch();
+    } catch {}
+    setFeedback(null);
   };
 
   function addIdea(){
@@ -305,6 +333,58 @@ export default function MissionsScreen() {
 
         <View style={{height:32}}/>
       </ScrollView>
+
+      {/* Feedback Modal — shown when snooze/skip is tapped */}
+      <Modal visible={!!feedback} animationType="slide" transparent>
+        <View style={fm.overlay}>
+          <View style={fm.sheet}>
+            <View style={fm.handle}/>
+            <View style={fm.headerRow}>
+              <View style={{flex:1}}>
+                <Text style={fm.title}>Why are you skipping this?</Text>
+                <Text style={fm.sub} numberOfLines={2}>{feedback?.title}</Text>
+              </View>
+              <TouchableOpacity style={fm.closeBtn} onPress={()=>setFeedback(null)}>
+                <Ionicons name="close" size={18} color={C.ink2}/>
+              </TouchableOpacity>
+            </View>
+            {/* Reason chips */}
+            <Text style={fm.label}>SELECT A REASON</Text>
+            <View style={fm.chipRow}>
+              {["Not relevant anymore","No time today","Will do later","Already done","Too difficult"].map(r=>(
+                <TouchableOpacity key={r}
+                  style={[fm.chip, feedbackReason===r&&fm.chipSel]}
+                  onPress={()=>setFeedbackReason(r)}>
+                  <Text style={[fm.chipText, feedbackReason===r&&{color:C.acc,fontWeight:"700"}]}>{r}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {/* Optional note */}
+            <Text style={fm.label}>ADDITIONAL NOTE (OPTIONAL)</Text>
+            <TextInput
+              style={fm.noteInput}
+              value={feedbackNote}
+              onChangeText={setFeedbackNote}
+              placeholder="Any context for the AI..."
+              placeholderTextColor={C.ink3}
+              multiline maxLength={200}
+            />
+            {/* Actions */}
+            <View style={{flexDirection:"row",gap:10}}>
+              <TouchableOpacity style={[fm.snoozeBtn, !feedbackReason&&{opacity:0.4}]}
+                disabled={!feedbackReason}
+                onPress={submitFeedback}>
+                <Ionicons name="alarm-outline" size={14} color="#fff"/>
+                <Text style={fm.snoozeBtnText}>Snooze 1 day + Save</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={fm.skipBtn} onPress={()=>setFeedback(null)}>
+                <Text style={fm.skipBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -368,4 +448,24 @@ const st = StyleSheet.create({
   tipText:     {flex:1,fontSize:12,color:C.ink2,lineHeight:18},
   chatCta:     {flexDirection:"row",alignItems:"center",justifyContent:"center",gap:9,backgroundColor:C.acc2,borderRadius:R.xl,padding:14},
   chatCtaText: {fontSize:14,fontWeight:"700",color:"#fff"},
+});
+
+const fm = StyleSheet.create({
+  overlay:    {flex:1,backgroundColor:"rgba(0,0,0,0.45)",justifyContent:"flex-end",...(Platform.OS==="web"?{position:"fixed" as any,top:0,left:0,right:0,bottom:0,zIndex:999}:{})},
+  sheet:      {backgroundColor:C.bgCard,borderTopLeftRadius:20,borderTopRightRadius:20,padding:20,paddingBottom:Platform.OS==="ios"?36:24,gap:14},
+  handle:     {width:40,height:4,borderRadius:2,backgroundColor:C.border2,alignSelf:"center",marginBottom:6},
+  headerRow:  {flexDirection:"row",alignItems:"flex-start",gap:12},
+  title:      {fontSize:17,fontWeight:"800",color:C.ink},
+  sub:        {fontSize:12,color:C.ink2,marginTop:3,lineHeight:17},
+  closeBtn:   {width:32,height:32,borderRadius:16,backgroundColor:C.bg2,alignItems:"center",justifyContent:"center"},
+  label:      {fontSize:10,fontWeight:"700",color:C.ink3,letterSpacing:1.2},
+  chipRow:    {flexDirection:"row",flexWrap:"wrap",gap:8},
+  chip:       {paddingHorizontal:13,paddingVertical:8,borderRadius:R.full,borderWidth:0.5,borderColor:C.border2,backgroundColor:C.bg2},
+  chipSel:    {borderColor:C.acc,backgroundColor:C.soft},
+  chipText:   {fontSize:12,color:C.ink2,fontWeight:"600"},
+  noteInput:  {borderWidth:0.5,borderColor:C.border2,borderRadius:R.lg,padding:12,fontSize:13,color:C.ink,backgroundColor:C.bg,minHeight:80,textAlignVertical:"top"},
+  snoozeBtn:  {flex:2,flexDirection:"row",alignItems:"center",justifyContent:"center",gap:7,backgroundColor:C.acc2,borderRadius:R.lg,paddingVertical:13,shadowColor:"#6D28D9",shadowOffset:{width:0,height:2},shadowOpacity:0.18,shadowRadius:4,elevation:3},
+  snoozeBtnText:{fontSize:13,fontWeight:"700",color:"#fff"},
+  skipBtn:    {flex:1,alignItems:"center",justifyContent:"center",backgroundColor:C.bg2,borderRadius:R.lg,paddingVertical:13,borderWidth:0.5,borderColor:C.border2},
+  skipBtnText:{fontSize:13,fontWeight:"600",color:C.ink2},
 });
