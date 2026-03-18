@@ -1,13 +1,16 @@
 // app/(tabs)/missions.tsx  —  Missions (v3 Lavender)
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator,
   StyleSheet, SafeAreaView, RefreshControl, Platform, Dimensions, TextInput,
   Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "expo-router";
 import { useRouter } from "expo-router";
 import { C, R, S, USER_ID } from "../constants/config";
+import { getIdeas, addIdea, convertIdea, removeIdea, syncFromRemote, Idea } from "../context/IdeasStore";
+import { ctxMissionCreate, ctxMissionInsight } from "../context/ChatContextStore";
 import { useGet, apiPost } from "../hooks/useApi";
 
 const MAX_W = 820;
@@ -40,6 +43,46 @@ const HABIT_SUGGESTIONS = [
   {emoji:"👨‍👧",title:"Family outing",    desc:"Plan something this weekend",    bg:C.soft,  border:C.acc},
   {emoji:"💊",title:"Health check-in",   desc:"Schedule next doctor visit",     bg:C.redS,  border:C.red},
 ];
+
+// ── Idea grouping ─────────────────────────────────────────────────────────────
+// Dynamic keyword-based classifier. Order matters — first match wins.
+// Only groups that actually have ideas are rendered (no empty headers).
+const IDEA_GROUPS: Array<{emoji:string; label:string; keywords:string[]}> = [
+  {emoji:"🌿", label:"Outdoors & Nature",  keywords:["hike","hiking","kayak","park","river","trail","nature","beach","camp","outdoor","spring break","waterfall","lake","forest"]},
+  {emoji:"🎭", label:"Culture & Outings",  keywords:["cultural","culture","market","event","festival","museum","temple","attraction","ybor","outing","show","exhibit","fair"]},
+  {emoji:"🎯", label:"Learning & Skills",  keywords:["learn","lesson","guitar","piano","casio","library","prompt","skill","course","class","study","read","book","practice","workshop"]},
+  {emoji:"🏃", label:"Fitness & Sport",    keywords:["cricket","gym","sport","fitness","swim","run","yoga","workout","play","judo","volleyball","tennis","cycling","bike"]},
+  {emoji:"👨‍👩‍👧", label:"Family",          keywords:["spouse","family","kids","child","daughter","drishti","together","sonam","date","dinner","movie"]},
+  {emoji:"💼", label:"Work & Projects",    keywords:["build","create","project","tool","app","work","code","develop","design","automate","launch"]},
+];
+
+function classifyIdea(text: string): {emoji:string; label:string} {
+  const lower = text.toLowerCase();
+  for (const g of IDEA_GROUPS) {
+    if (g.keywords.some(kw => lower.includes(kw))) {
+      return {emoji: g.emoji, label: g.label};
+    }
+  }
+  return {emoji:"💡", label:"Other"};
+}
+
+// Returns only groups that have at least one idea (pending or converted)
+function groupIdeas(ideas: Idea[]): Array<{emoji:string; label:string; ideas:Idea[]}> {
+  const map = new Map<string, {emoji:string; label:string; ideas:Idea[]}>();
+  for (const idea of ideas) {
+    const {emoji, label} = classifyIdea(idea.text);
+    const key = label;
+    if (!map.has(key)) map.set(key, {emoji, label, ideas:[]});
+    map.get(key)!.ideas.push(idea);
+  }
+  // Maintain IDEA_GROUPS order, then append "Other" at end
+  const ordered: Array<{emoji:string; label:string; ideas:Idea[]}> = [];
+  for (const g of IDEA_GROUPS) {
+    if (map.has(g.label)) ordered.push(map.get(g.label)!);
+  }
+  if (map.has("Other")) ordered.push(map.get("Other")!);
+  return ordered;
+}
 
 const PRODUCTIVITY_TIPS = [
   {icon:"bulb-outline"     as const, color:C.amber,  tip:"Batch similar errands — saves 40% of driving time."},
@@ -111,20 +154,31 @@ export default function MissionsScreen() {
   const [feedback,   setFeedback]   = useState<{missionId:string;title:string}|null>(null);
   const [feedbackNote, setFeedbackNote] = useState("");
   const [feedbackReason, setFeedbackReason] = useState("");
-  const [localIdeas, setLocalIdeas] = useState<string[]>([]);
+  const [localIdeas, setLocalIdeas] = useState<Idea[]>([]);
 
-  const res = useGet<{missions:Mission[]}>(`/api/missions?user_id=${USER_ID}&status=${filter}`);
+  useFocusEffect(useCallback(()=>{
+    syncFromRemote().then(setLocalIdeas);
+    res.refetch();
+    resAll.refetch();
+  },[]));
+
+  // Filtered list — drives the visible mission cards
+  const res      = useGet<{missions:Mission[]}>(`/api/missions?user_id=${USER_ID}&status=${filter}`);
+  // All missions — drives the stats strip (always accurate regardless of filter)
+  const resAll   = useGet<{missions:Mission[]}>(`/api/missions?user_id=${USER_ID}&status=all`);
   useEffect(()=>{ res.refetch(); },[filter]);
   const onRefresh=async()=>{ setRefreshing(true); res.refetch(); setRefreshing(false); };
 
-  const missions=res.data?.missions||[];
-  const overdue =missions.filter(m=>m.status==="pending"&&isPast(m.end_time));
-  const onTime  =missions.filter(m=>m.status==="pending"&&!isPast(m.end_time));
-  const reviewed=missions.filter(m=>m.status==="reviewed");
+  const missions    = res.data?.missions    || [];   // filtered — for cards
+  const allMissions = resAll.data?.missions || [];   // all — for stats
+  const overdue  = allMissions.filter(m=>m.status==="pending"&&isPast(m.end_time));
+  const onTime   = allMissions.filter(m=>m.status==="pending"&&!isPast(m.end_time));
+  const reviewed = allMissions.filter(m=>m.status==="reviewed");
 
   const handleComplete=async(id:string)=>{
-    try { await apiPost(`/api/missions/${id}/complete`,{}); res.refetch(); } catch {}
+    try { await apiPost(`/api/missions/${id}/complete`,{}); res.refetch(); resAll.refetch(); } catch {}
   };
+
   const handleSnooze=(id:string)=>{
     const mission = missions.find(m=>m.id===id);
     setFeedbackNote("");
@@ -134,29 +188,48 @@ export default function MissionsScreen() {
 
   const submitFeedback=async()=>{
     if(!feedback) return;
-    const until=new Date(Date.now()+86400000).toISOString();
+    const isAlreadyDone = feedbackReason === "Already done";
+
     try {
-      await apiPost(`/api/missions/${feedback.missionId}/snooze`,{
-        snoozed_until:until,
-        feedback_note:feedbackNote,
-        reason:feedbackReason,
-      });
-      // Also log feedback
-      await apiPost("/api/feedback",{
-        user_id: USER_ID,
-        mission_id: feedback.missionId,
-        feedback_type:"skipped",
-        reason: feedbackReason,
-        note: feedbackNote,
-      });
+      if (isAlreadyDone) {
+        // ── "Already done" → mark complete + log positive feedback to memory
+        await apiPost(`/api/missions/${feedback.missionId}/complete`, {});
+        await apiPost("/api/feedback", {
+          user_id:       USER_ID,
+          mission:       feedback.title,
+          feedback:      feedbackNote || "Already completed",
+          rating:        "thumbs_up",   // positive signal for memory
+          feedback_type: "completed",
+          reason:        feedbackReason,
+          note:          feedbackNote,
+        });
+      } else {
+        // ── Any other reason → snooze 1 day + log skip feedback
+        const until = new Date(Date.now() + 86400000).toISOString();
+        await apiPost(`/api/missions/${feedback.missionId}/snooze`, {
+          snoozed_until: until,
+          feedback_note: feedbackNote,
+          reason:        feedbackReason,
+        });
+        await apiPost("/api/feedback", {
+          user_id:       USER_ID,
+          mission:       feedback.title,
+          feedback:      feedbackNote || feedbackReason,
+          rating:        "thumbs_down",
+          feedback_type: "skipped",
+          reason:        feedbackReason,
+          note:          feedbackNote,
+        });
+      }
       res.refetch();
+      resAll.refetch();
     } catch {}
     setFeedback(null);
   };
 
-  function addIdea(){
+  function handleAddIdea(){
     if(!ideaDraft.trim()) return;
-    setLocalIdeas(prev=>[ideaDraft.trim(),...prev]);
+    addIdea(ideaDraft.trim()).then(setLocalIdeas);
     setIdeaDraft("");
   }
 
@@ -239,9 +312,9 @@ export default function MissionsScreen() {
         {/* Ideas inbox */}
         <View style={st.ideasHeader}>
           <Text style={st.sl}>💡 IDEAS INBOX</Text>
-          {localIdeas.length>0&&(
+          {localIdeas.filter(i=>!i.converted).length>0&&(
             <View style={st.ideasBadge}>
-              <Text style={st.ideasBadgeText}>{localIdeas.length} saved</Text>
+              <Text style={st.ideasBadgeText}>{localIdeas.filter(i=>!i.converted).length} pending</Text>
             </View>
           )}
         </View>
@@ -255,12 +328,12 @@ export default function MissionsScreen() {
               onChangeText={setIdeaDraft}
               placeholder="Drop an idea here…"
               placeholderTextColor={C.ink3}
-              onSubmitEditing={addIdea}
+              onSubmitEditing={handleAddIdea}
               returnKeyType="done"
             />
             <TouchableOpacity
               style={[st.captureBtn,!ideaDraft.trim()&&{opacity:0.4}]}
-              onPress={addIdea} disabled={!ideaDraft.trim()}>
+              onPress={handleAddIdea} disabled={!ideaDraft.trim()}>
               <Ionicons name="add" size={14} color="#fff"/>
             </TouchableOpacity>
           </View>
@@ -272,25 +345,48 @@ export default function MissionsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Ideas list */}
+        {/* Ideas list — grouped by category */}
         {localIdeas.length>0&&(
-          <View style={[st.ideasList,S.xs]}>
-            {localIdeas.map((idea,i)=>(
-              <View key={i} style={[st.ideaRow,i===localIdeas.length-1&&{borderBottomWidth:0}]}>
-                <View style={st.ideaIcon}><Ionicons name="bulb-outline" size={13} color={C.acc}/></View>
-                <Text style={st.ideaText}>{idea}</Text>
-                <TouchableOpacity style={st.convertBtn}
-                  onPress={()=>setLocalIdeas(prev=>prev.filter((_,j)=>j!==i))}>
-                  <Text style={st.convertText}>→ Mission</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={()=>setLocalIdeas(prev=>prev.filter((_,j)=>j!==i))}>
-                  <Ionicons name="close" size={14} color={C.ink3}/>
-                </TouchableOpacity>
+          <View style={{gap:10}}>
+            {groupIdeas(localIdeas).map(group=>(
+              <View key={group.label} style={[st.ideasList,S.xs]}>
+                {/* Group header */}
+                <View style={st.ideaGroupHeader}>
+                  <Text style={st.ideaGroupEmoji}>{group.emoji}</Text>
+                  <Text style={st.ideaGroupLabel}>{group.label}</Text>
+                  <View style={st.ideaGroupCount}>
+                    <Text style={st.ideaGroupCountText}>
+                      {group.ideas.filter(i=>!i.converted).length} pending
+                    </Text>
+                  </View>
+                </View>
+                {/* Ideas in group */}
+                {group.ideas.map((idea,i)=>(
+                  <View key={idea.id||String(i)}
+                    style={[st.ideaRow, i===group.ideas.length-1&&{borderBottomWidth:0}, idea.converted&&{opacity:0.45}]}>
+                    <View style={st.ideaIcon}>
+                      <Ionicons name={idea.converted?"checkmark":"bulb-outline"} size={13}
+                        color={idea.converted?C.green:C.acc}/>
+                    </View>
+                    <Text style={[st.ideaText,idea.converted&&{textDecorationLine:"line-through",color:C.ink3}]}>
+                      {idea.text}
+                    </Text>
+                    {!idea.converted&&<>
+                      <TouchableOpacity style={st.convertBtn}
+                        onPress={()=>convertIdea(idea.id).then(setLocalIdeas)}>
+                        <Text style={st.convertText}>→ Mission</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={()=>removeIdea(idea.id).then(setLocalIdeas)}>
+                        <Ionicons name="close" size={14} color={C.ink3}/>
+                      </TouchableOpacity>
+                    </>}
+                  </View>
+                ))}
               </View>
             ))}
           </View>
         )}
+
 
         {/* Habit suggestions */}
         <Text style={st.sl}>💡 SUGGESTED HABITS FOR YOUR FAMILY</Text>
@@ -325,7 +421,10 @@ export default function MissionsScreen() {
         </View>
 
         {/* Chat CTA */}
-        <TouchableOpacity style={[st.chatCta,S.md]} onPress={()=>router.push("/(tabs)/chat")}>
+        <TouchableOpacity style={[st.chatCta,S.md]} onPress={()=>{
+          ctxMissionCreate(onTime.length, overdue.length);
+          router.push("/(tabs)/chat");
+        }}>
           <Ionicons name="chatbubble-outline" size={17} color="#fff"/>
           <Text style={st.chatCtaText}>Create a mission via Chat</Text>
           <Ionicons name="arrow-forward" size={14} color="#fff"/>
@@ -334,14 +433,18 @@ export default function MissionsScreen() {
         <View style={{height:32}}/>
       </ScrollView>
 
-      {/* Feedback Modal — shown when snooze/skip is tapped */}
+      {/* Feedback Modal — action adapts to selected reason */}
       <Modal visible={!!feedback} animationType="slide" transparent>
         <View style={fm.overlay}>
           <View style={fm.sheet}>
             <View style={fm.handle}/>
             <View style={fm.headerRow}>
               <View style={{flex:1}}>
-                <Text style={fm.title}>Why are you skipping this?</Text>
+                <Text style={fm.title}>
+                  {feedbackReason==="Already done"
+                    ? "Mark as completed ✓"
+                    : "Why are you skipping this?"}
+                </Text>
                 <Text style={fm.sub} numberOfLines={2}>{feedback?.title}</Text>
               </View>
               <TouchableOpacity style={fm.closeBtn} onPress={()=>setFeedback(null)}>
@@ -353,29 +456,63 @@ export default function MissionsScreen() {
             <View style={fm.chipRow}>
               {["Not relevant anymore","No time today","Will do later","Already done","Too difficult"].map(r=>(
                 <TouchableOpacity key={r}
-                  style={[fm.chip, feedbackReason===r&&fm.chipSel]}
+                  style={[fm.chip, feedbackReason===r&&fm.chipSel,
+                    r==="Already done"&&feedbackReason===r&&{backgroundColor:C.greenS,borderColor:C.greenB}
+                  ]}
                   onPress={()=>setFeedbackReason(r)}>
-                  <Text style={[fm.chipText, feedbackReason===r&&{color:C.acc,fontWeight:"700"}]}>{r}</Text>
+                  <Text style={[fm.chipText, feedbackReason===r&&{color:C.acc,fontWeight:"700"},
+                    r==="Already done"&&feedbackReason===r&&{color:C.green}
+                  ]}>
+                    {r==="Already done" ? "✓ Already done" : r}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
-            {/* Optional note */}
-            <Text style={fm.label}>ADDITIONAL NOTE (OPTIONAL)</Text>
+
+            {/* Context note — label adapts to reason */}
+            <Text style={fm.label}>
+              {feedbackReason==="Already done"
+                ? "ADD A NOTE (OPTIONAL)"
+                : "ADDITIONAL NOTE (OPTIONAL)"}
+            </Text>
             <TextInput
               style={fm.noteInput}
               value={feedbackNote}
               onChangeText={setFeedbackNote}
-              placeholder="Any context for the AI..."
+              placeholder={
+                feedbackReason==="Already done"
+                  ? "When did you complete it? Any notes…"
+                  : "Any context for the AI..."
+              }
               placeholderTextColor={C.ink3}
               multiline maxLength={200}
             />
+
+            {/* Info banner for "Already done" */}
+            {feedbackReason==="Already done"&&(
+              <View style={fm.doneBanner}>
+                <Ionicons name="checkmark-circle-outline" size={14} color={C.green}/>
+                <Text style={fm.doneBannerText}>
+                  This will mark the mission complete and update your AI memory — not snooze it.
+                </Text>
+              </View>
+            )}
+
             {/* Actions */}
             <View style={{flexDirection:"row",gap:10}}>
-              <TouchableOpacity style={[fm.snoozeBtn, !feedbackReason&&{opacity:0.4}]}
+              <TouchableOpacity
+                style={[
+                  feedbackReason==="Already done" ? fm.doneBtn : fm.snoozeBtn,
+                  !feedbackReason&&{opacity:0.4}
+                ]}
                 disabled={!feedbackReason}
                 onPress={submitFeedback}>
-                <Ionicons name="alarm-outline" size={14} color="#fff"/>
-                <Text style={fm.snoozeBtnText}>Snooze 1 day + Save</Text>
+                <Ionicons
+                  name={feedbackReason==="Already done" ? "checkmark-circle-outline" : "alarm-outline"}
+                  size={14} color="#fff"/>
+                <Text style={fm.snoozeBtnText}>
+                  {feedbackReason==="Already done" ? "Mark Complete + Save" : "Snooze 1 day + Save"}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity style={fm.skipBtn} onPress={()=>setFeedback(null)}>
                 <Text style={fm.skipBtnText}>Cancel</Text>
@@ -432,6 +569,11 @@ const st = StyleSheet.create({
   voiceIcon:   {width:26,height:26,borderRadius:7,backgroundColor:C.soft,alignItems:"center",justifyContent:"center"},
   voiceText:   {fontSize:12,color:C.acc,fontWeight:"600"},
   ideasList:   {backgroundColor:C.bgCard,borderRadius:R.xl,borderWidth:0.5,borderColor:C.border2,overflow:"hidden"},
+  ideaGroupHeader:{flexDirection:"row",alignItems:"center",gap:7,paddingHorizontal:12,paddingVertical:9,backgroundColor:C.bg2,borderBottomWidth:0.5,borderBottomColor:C.border2},
+  ideaGroupEmoji: {fontSize:13},
+  ideaGroupLabel: {flex:1,fontSize:11,fontWeight:"700",color:C.ink,letterSpacing:0.3},
+  ideaGroupCount: {backgroundColor:C.soft,borderRadius:R.full,paddingHorizontal:8,paddingVertical:2,borderWidth:0.5,borderColor:C.border},
+  ideaGroupCountText:{fontSize:9,fontWeight:"700",color:C.acc},
   ideaRow:     {flexDirection:"row",alignItems:"center",gap:9,padding:11,borderBottomWidth:0.5,borderBottomColor:C.bg2},
   ideaIcon:    {width:26,height:26,borderRadius:7,backgroundColor:C.soft,alignItems:"center",justifyContent:"center"},
   ideaText:    {flex:1,fontSize:13,color:C.ink2,lineHeight:18},
@@ -465,7 +607,10 @@ const fm = StyleSheet.create({
   chipText:   {fontSize:12,color:C.ink2,fontWeight:"600"},
   noteInput:  {borderWidth:0.5,borderColor:C.border2,borderRadius:R.lg,padding:12,fontSize:13,color:C.ink,backgroundColor:C.bg,minHeight:80,textAlignVertical:"top"},
   snoozeBtn:  {flex:2,flexDirection:"row",alignItems:"center",justifyContent:"center",gap:7,backgroundColor:C.acc2,borderRadius:R.lg,paddingVertical:13,shadowColor:"#6D28D9",shadowOffset:{width:0,height:2},shadowOpacity:0.18,shadowRadius:4,elevation:3},
+  doneBtn:    {flex:2,flexDirection:"row",alignItems:"center",justifyContent:"center",gap:7,backgroundColor:C.green,borderRadius:R.lg,paddingVertical:13,shadowColor:C.green,shadowOffset:{width:0,height:2},shadowOpacity:0.25,shadowRadius:4,elevation:3},
   snoozeBtnText:{fontSize:13,fontWeight:"700",color:"#fff"},
   skipBtn:    {flex:1,alignItems:"center",justifyContent:"center",backgroundColor:C.bg2,borderRadius:R.lg,paddingVertical:13,borderWidth:0.5,borderColor:C.border2},
   skipBtnText:{fontSize:13,fontWeight:"600",color:C.ink2},
+  doneBanner: {flexDirection:"row",alignItems:"flex-start",gap:8,backgroundColor:C.greenS,borderRadius:R.lg,borderWidth:0.5,borderColor:C.greenB,padding:10},
+  doneBannerText:{flex:1,fontSize:12,color:"#065F46",lineHeight:17},
 });

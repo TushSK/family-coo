@@ -4,6 +4,10 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView, Act
 import { Ionicons } from "@expo/vector-icons";
 import { C, R, S, USER_ID, API_BASE } from "../constants/config";
 import { useGet } from "../hooks/useApi";
+import { getIdeas, syncFromRemote, Idea } from "../context/IdeasStore";
+import { useFocusEffect } from "expo-router";
+import { useCallback } from "react";
+import { ctxEngineInsight, ctxUpdateIdentity, ctxPreferenceDrill } from "../context/ChatContextStore";
 import { useRouter } from "expo-router";
 
 const MAX_W = 820;
@@ -12,14 +16,70 @@ type Confidence = "high"|"med"|"low";
 type ViewMode = "engine"|"report"|"profile";
 
 function SLabel({text}:{text:string}){ return <Text style={st.sl}>{text}</Text>; }
+
+// Static (non-tappable) pill — used outside the identity card
 function Pill({label,conf="high"}:{label:string;conf?:Confidence}){
   const bg=conf==="high"?C.greenS:conf==="med"?C.amberS:C.bg2;
   const color=conf==="high"?"#065F46":conf==="med"?"#92400E":C.ink2;
   const border=conf==="high"?C.greenB:conf==="med"?C.amberB:C.border;
   return <View style={[st.pill,{backgroundColor:bg,borderColor:border}]}><Text style={[st.pillText,{color}]}>{label}</Text></View>;
 }
+
+// Tappable pill — used inside the Household Identity card (fix #4)
+// Tap → ctxPreferenceDrill → chat gives 3 ideas for that preference
+function TappablePill({label,conf="high",onTap}:{label:string;conf?:Confidence;onTap:()=>void}){
+  const bg=conf==="high"?C.greenS:conf==="med"?C.amberS:C.bg2;
+  const color=conf==="high"?"#065F46":conf==="med"?"#92400E":C.ink2;
+  const border=conf==="high"?C.greenB:conf==="med"?C.amberB:C.border;
+  return (
+    <TouchableOpacity
+      style={[st.pill,{backgroundColor:bg,borderColor:border},st.pillTappable]}
+      onPress={onTap}
+      activeOpacity={0.65}
+    >
+      <Text style={[st.pillText,{color}]}>{label}</Text>
+      <Ionicons name="chevron-forward" size={9} color={color} style={{marginLeft:2}}/>
+    </TouchableOpacity>
+  );
+}
+
 function insightColors(type:string){
   switch(type){case "win":return{bg:C.greenS,border:C.greenB,text:"#065F46"};case "watch":return{bg:C.amberS,border:C.amberB,text:"#92400E"};case "tip":return{bg:C.soft,border:C.border,text:C.acc};default:return{bg:C.bg2,border:C.border2,text:C.ink2};}
+}
+
+// ── AI Personality Summary — generated from live memory ──────────────────────
+// Builds a short human-readable sentence describing this household's personality
+// so the Identity card shows meaningful text instead of just a pile of pills.
+function buildPersonalitySummary(memory:any, location:string): string {
+  const cuisine: string[] = memory.cuisine || memory.food_preferences || [];
+  const interests: string[] = memory.interests || memory.lifestyle_interests || [];
+  const hobbies: string[] = memory.hobbies || memory.hobby_list || [];
+  const fam: any[] = Array.isArray(memory.family_members||memory.family) ? (memory.family_members||memory.family) : [];
+
+  const cuisineStr = cuisine.length
+    ? cuisine.slice(0,2).join(" & ").toLowerCase()
+    : "Indian home cooking";
+  const interestStr = [...interests,...hobbies].slice(0,2)
+    .join(" and ")
+    .toLowerCase() || "Python/AI and sci-fi films";
+  const famNote = fam.length > 0 ? `a family of ${fam.length}` : "a household";
+
+  return (
+    `${famNote.charAt(0).toUpperCase() + famNote.slice(1)} in ${location} ` +
+    `that loves ${cuisineStr}. Interests span ${interestStr}. ` +
+    `Active at EōS Fitness and keeps weekends family-centred. ` +
+    `The AI uses this profile to personalise every suggestion.`
+  );
+}
+
+// ── Profile freshness — count how many fields come from live API vs defaults ──
+function memoryFieldCount(memory:any): number {
+  let n = 0;
+  if((memory.cuisine||memory.food_preferences||[]).length) n++;
+  if((memory.interests||memory.lifestyle_interests||[]).length) n++;
+  if((memory.hobbies||memory.hobby_list||[]).length) n++;
+  if(memory.location||memory.home_city) n++;
+  return n;
 }
 
 export default function EngineScreen() {
@@ -29,6 +89,16 @@ export default function EngineScreen() {
   const memRes = useGet<{memory:any;ideas:any[]}>(`/api/memory?user_id=${USER_ID}`);
   const insRes = useGet<{kpis:any;insights:any[]}>(`/api/insights?user_id=${USER_ID}`);
   useEffect(()=>{memRes.refetch();insRes.refetch();},[]);
+
+  // Load ideas from shared AsyncStorage store — stays in sync with Missions tab
+  const [localIdeas, setLocalIdeas] = React.useState<Idea[]>([]);
+  useFocusEffect(useCallback(()=>{
+    syncFromRemote().then(setLocalIdeas);
+    memRes.refetch();
+    insRes.refetch();
+  },[]));
+
+  const pendingIdeasCount = localIdeas.filter(i=>!i.converted).length;
 
   const memory=memRes.data?.memory||{};
   const ideas=memRes.data?.ideas||[];
@@ -66,11 +136,48 @@ export default function EngineScreen() {
     {label:"Household errands",pct:91,color:C.green,note:"Very consistent"},
   ];
   const weakest=[...categories].sort((a:any,b:any)=>a.pct-b.pct)[0];
-  const clusters:Record<string,Array<{label:string;conf:Confidence}>>={
-    "Diet & Dining":[{label:"🍲 Indian Cuisine",conf:"high"},{label:"👨‍🍳 Home Cooking",conf:"high"},{label:"🥡 Takeout Weekends",conf:"med"}],
-    "Media & Interests":[{label:"💻 Python / AI",conf:"high"},{label:"🎬 Sci-Fi",conf:"high"},{label:"🎸 Yousician",conf:"med"}],
-    "Logistics":[{label:"🚗 Kia Seltos",conf:"high"},{label:"🏋️ EōS Fitness",conf:"high"},{label:"📍 Tampa, FL",conf:"high"}],
-  };
+  // Build identity clusters from live memory — fall back to Profile Studio onboarding data
+  function buildClusters(): Record<string,Array<{label:string;conf:Confidence}>> {
+    const interests: string[] = memory.interests || memory.lifestyle_interests || [];
+    const cuisine:   string[] = memory.cuisine    || memory.food_preferences   || [];
+    const hobbies:   string[] = memory.hobbies    || memory.hobby_list         || [];
+    const vehicles:  string[] = memory.vehicles   || [];
+    const routines:  string[] = memory.routines   || [];
+
+    // If memory is populated, use it
+    const dietPills = [
+      ...cuisine.slice(0,3).map(c=>({label:`🍽 ${c}`,conf:"high" as Confidence})),
+      ...(cuisine.length===0?[
+        {label:"🍲 Indian Cuisine",conf:"high" as Confidence},
+        {label:"👨‍🍳 Home Cooking",conf:"high" as Confidence},
+        {label:"🥡 Takeout Weekends",conf:"med" as Confidence},
+      ]:[]),
+    ].slice(0,4);
+
+    const interestPills = [
+      ...interests.slice(0,3).map(i=>({label:`✨ ${i}`,conf:"high" as Confidence})),
+      ...hobbies.slice(0,2).map(h=>({label:`🎯 ${h}`,conf:"med" as Confidence})),
+      ...(interests.length===0?[
+        {label:"💻 Python / AI",conf:"high" as Confidence},
+        {label:"🎬 Sci-Fi films",conf:"high" as Confidence},
+        {label:"🎸 Yousician",conf:"med" as Confidence},
+      ]:[]),
+    ].slice(0,4);
+
+    const logisticsPills = [
+      ...vehicles.slice(0,1).map(v=>({label:`🚗 ${v}`,conf:"high" as Confidence})),
+      ...routines.slice(0,2).map(r=>({label:`⏰ ${r}`,conf:"med" as Confidence})),
+      {label:`🏋️ EōS Fitness`,conf:"high" as Confidence},
+      {label:`📍 ${location}`,conf:"high" as Confidence},
+    ].slice(0,4);
+
+    return {
+      "Diet & Dining":    dietPills,
+      "Interests & Media":interestPills,
+      "Logistics":        logisticsPills,
+    };
+  }
+  const clusters = buildClusters();
   const loading=memRes.loading||insRes.loading;
 
   if(view==="engine") return (
@@ -92,7 +199,7 @@ export default function EngineScreen() {
         </View>
         {/* Stats */}
         <View style={[st.statRow,S.xs]}>
-          {[[String(ideas.length||"—"),"Ideas",C.acc],[String(fam.length||"—"),"Family",C.amber],[String(pendingMissions),"Pending",pendingMissions>0?C.red:C.green]].map(([v,l,c],i)=>(
+          {[[String(pendingIdeasCount),"Ideas",C.acc],[String(fam.length||"—"),"Family",C.amber],[String(pendingMissions),"Pending",pendingMissions>0?C.red:C.green]].map(([v,l,c],i)=>(
             <View key={l} style={[st.statBox,i<2&&{borderRightWidth:0.5,borderRightColor:C.bg2}]}>
               <Text style={[st.statNum,{color:c as string}]}>{v}</Text><Text style={st.statLbl}>{l}</Text>
             </View>
@@ -162,19 +269,107 @@ export default function EngineScreen() {
           </View>
           <Text style={st.insightBodyText}>{aiInsight?aiInsight.detail:"You consistently follow through on physical activities but skip learning & leisure. Scheduling Yousician after gym could boost follow-through ~40%."}</Text>
           <View style={{flexDirection:"row",gap:8,marginTop:10}}>
-            <TouchableOpacity style={[st.chatBtn,S.sm]} onPress={()=>router.push("/(tabs)/chat")}><Text style={st.chatBtnText}>Chat about this</Text></TouchableOpacity>
+            <TouchableOpacity style={[st.chatBtn,S.sm]} onPress={()=>{
+              if(aiInsight) ctxEngineInsight(aiInsight.detail);
+              router.push("/(tabs)/chat");
+            }}><Text style={st.chatBtnText}>Chat about this</Text></TouchableOpacity>
             <TouchableOpacity style={st.dismissBtn}><Text style={st.dismissText}>Dismiss</Text></TouchableOpacity>
           </View>
         </View>
-        {/* Identity */}
+        {/* ── HOUSEHOLD IDENTITY (fix #4) — live + tappable + AI summary ── */}
         <SLabel text="🧬 HOUSEHOLD IDENTITY"/>
-        <View style={[st.card,S.xs]}>
-          {Object.entries(clusters).map(([cat,pills])=>(
-            <View key={cat} style={st.clusterRow}>
-              <Text style={st.clusterCat}>{cat}</Text>
-              <View style={{flexDirection:"row",flexWrap:"wrap",marginLeft:-3}}>{pills.map((p,i)=><Pill key={i} label={p.label} conf={p.conf}/>)}</View>
+        <View style={[st.card,S.xs,{gap:0,padding:0,overflow:"hidden"}]}>
+
+          {/* ① AI Personality Summary strip */}
+          <View style={st.identSummaryBox}>
+            <View style={{flexDirection:"row",alignItems:"center",gap:6,marginBottom:7}}>
+              <View style={st.identSummaryIcon}><Text style={{fontSize:11}}>✦</Text></View>
+              <Text style={st.identSummaryLabel}>AI PERSONALITY SNAPSHOT</Text>
+              {/* Freshness badge */}
+              <View style={[st.identFreshBadge,memoryFieldCount(memory)>0?{}:{backgroundColor:C.amberS,borderColor:C.amberB}]}>
+                <Text style={[st.identFreshText,memoryFieldCount(memory)>0?{}:{color:"#92400E"}]}>
+                  {memoryFieldCount(memory)>0?`${memoryFieldCount(memory)} live fields ✓`:"Using defaults"}
+                </Text>
+              </View>
             </View>
-          ))}
+            <Text style={st.identSummaryText}>
+              {buildPersonalitySummary(memory, location)}
+            </Text>
+          </View>
+
+          <View style={{height:0.5,backgroundColor:C.bg2}}/>
+
+          {/* ② Tappable preference pills — tap = get 3 AI ideas for that pref */}
+          <View style={{padding:14,gap:0}}>
+            <Text style={[st.identTapHint,{marginBottom:12}]}>
+              Tap any tag to get personalised suggestions →
+            </Text>
+            {Object.entries(clusters).map(([cat,pills])=>(
+              <View key={cat} style={st.clusterRow}>
+                <Text style={st.clusterCat}>{cat}</Text>
+                <View style={{flexDirection:"row",flexWrap:"wrap",marginLeft:-3}}>
+                  {pills.map((p,i)=>(
+                    <TappablePill
+                      key={i}
+                      label={p.label}
+                      conf={p.conf}
+                      onTap={()=>{
+                        // Strip emoji prefix for a cleaner context label
+                        const clean = p.label.replace(/^[\p{Emoji}\s]+/u,"").trim();
+                        ctxPreferenceDrill(clean);
+                        router.push("/(tabs)/chat");
+                      }}
+                    />
+                  ))}
+                </View>
+              </View>
+            ))}
+
+            {/* ③ Ideas inbox row */}
+            <View style={st.clusterRow}>
+              <Text style={st.clusterCat}>
+                💡 Ideas inbox {pendingIdeasCount>0?`(${pendingIdeasCount} pending)`:""}
+              </Text>
+              {pendingIdeasCount>0?(
+                <View style={{flexDirection:"row",flexWrap:"wrap",marginLeft:-3}}>
+                  {localIdeas.filter(i=>!i.converted).slice(0,4).map((idea)=>(
+                    <TouchableOpacity
+                      key={idea.id}
+                      style={[st.pill,{backgroundColor:C.tealS,borderColor:C.teal+"40"},st.pillTappable]}
+                      onPress={()=>{ ctxPreferenceDrill(idea.text.slice(0,60)); router.push("/(tabs)/chat"); }}
+                      activeOpacity={0.65}>
+                      <Text style={[st.pillText,{color:C.teal}]} numberOfLines={1}>
+                        {idea.text.slice(0,26)}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={9} color={C.teal} style={{marginLeft:2}}/>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ):(
+                <Text style={{fontSize:11,color:C.ink3,marginTop:4}}>
+                  No ideas yet — add them in the Missions tab 💡
+                </Text>
+              )}
+            </View>
+          </View>
+
+          <View style={{height:0.5,backgroundColor:C.bg2}}/>
+
+          {/* ④ Quick-action footer row */}
+          <View style={{flexDirection:"row",borderTopWidth:0,gap:0}}>
+            <TouchableOpacity
+              style={[st.identFooterBtn,{flex:1,borderRightWidth:0.5,borderRightColor:C.bg2}]}
+              onPress={()=>{ ctxUpdateIdentity(); router.push("/(tabs)/chat"); }}>
+              <Ionicons name="create-outline" size={13} color={C.acc}/>
+              <Text style={st.identFooterBtnText}>Update preferences</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[st.identFooterBtn,{flex:1}]}
+              onPress={()=>{ memRes.refetch(); }}>
+              <Ionicons name="refresh-outline" size={13} color={C.ink3}/>
+              <Text style={[st.identFooterBtnText,{color:C.ink3}]}>Refresh from memory</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         {/* Engine room */}
         <SLabel text="⚙️ ENGINE ROOM"/>
@@ -311,7 +506,20 @@ const st = StyleSheet.create({
   suggestionBox:{backgroundColor:C.amberS,borderRadius:R.sm,padding:7,borderLeftWidth:2,borderLeftColor:C.amber},suggestionLabel:{fontSize:9,fontWeight:"700",color:C.amber,marginBottom:2},suggestionText:{fontSize:11,color:"#78350F",lineHeight:16},
   insightCard:{backgroundColor:C.bgCard,borderRadius:R.xl,borderWidth:0.5,borderColor:C.border,padding:14},insightIconWrap:{width:22,height:22,borderRadius:R.xs,backgroundColor:C.soft,alignItems:"center",justifyContent:"center"},insightLabelText:{fontSize:10,fontWeight:"700",color:C.acc,letterSpacing:1},insightBodyText:{fontSize:13,color:C.ink2,lineHeight:20},
   chatBtn:{flex:1,backgroundColor:C.acc2,borderRadius:R.lg,paddingVertical:10,alignItems:"center"},chatBtnText:{fontSize:12,fontWeight:"700",color:"#fff"},dismissBtn:{flex:1,backgroundColor:C.bg2,borderRadius:R.lg,paddingVertical:10,alignItems:"center",borderWidth:0.5,borderColor:C.border2},dismissText:{fontSize:12,fontWeight:"600",color:C.ink2},
-  clusterRow:{marginBottom:12},clusterCat:{fontSize:12,fontWeight:"700",color:C.ink,marginBottom:7},pill:{paddingHorizontal:10,paddingVertical:4,borderRadius:R.full,borderWidth:0.5,margin:3},pillText:{fontSize:11,fontWeight:"700"},
+  clusterRow:{marginBottom:12},clusterCat:{fontSize:12,fontWeight:"700",color:C.ink,marginBottom:7},
+  pill:{paddingHorizontal:10,paddingVertical:4,borderRadius:R.full,borderWidth:0.5,margin:3},
+  pillTappable:{flexDirection:"row",alignItems:"center",paddingRight:7},
+  pillText:{fontSize:11,fontWeight:"700"},
+  // ── Household Identity card (fix #4) ────────────────────────────────────────
+  identSummaryBox:{backgroundColor:C.soft,padding:14},
+  identSummaryIcon:{width:20,height:20,borderRadius:5,backgroundColor:C.bgCard,borderWidth:0.5,borderColor:C.border,alignItems:"center",justifyContent:"center"},
+  identSummaryLabel:{fontSize:10,fontWeight:"700",color:C.acc,letterSpacing:1,flex:1},
+  identSummaryText:{fontSize:12,color:C.ink2,lineHeight:19},
+  identFreshBadge:{backgroundColor:C.greenS,borderRadius:R.full,borderWidth:0.5,borderColor:C.greenB,paddingHorizontal:8,paddingVertical:2},
+  identFreshText:{fontSize:9,fontWeight:"700",color:"#065F46"},
+  identTapHint:{fontSize:10,color:C.ink3,fontStyle:"italic"},
+  identFooterBtn:{flexDirection:"row",alignItems:"center",justifyContent:"center",gap:6,paddingVertical:11,backgroundColor:C.bg2},
+  identFooterBtnText:{fontSize:11,fontWeight:"700",color:C.acc},
   engineRow:{flexDirection:"row",alignItems:"center",gap:11,paddingHorizontal:13,paddingVertical:11},engineIcon:{width:30,height:30,borderRadius:R.sm,alignItems:"center",justifyContent:"center"},engineLabel:{flex:1,fontSize:13,color:C.ink,fontWeight:"500"},engineVal:{fontSize:11,fontWeight:"700",maxWidth:140},
   docsBtn:{flexDirection:"row",alignItems:"center",justifyContent:"center",gap:7,paddingVertical:11,backgroundColor:C.soft,borderRadius:R.lg,borderWidth:0.5,borderColor:C.border},docsBtnText:{fontSize:13,fontWeight:"700",color:C.acc},
   dedInline:{padding:12},dedIconWrap:{width:22,height:22,borderRadius:R.xs,backgroundColor:C.soft,alignItems:"center",justifyContent:"center"},dedText:{fontSize:13,color:C.ink2,lineHeight:19,flex:1},

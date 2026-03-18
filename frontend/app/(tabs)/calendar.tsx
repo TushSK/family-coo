@@ -1,5 +1,5 @@
 // app/(tabs)/calendar.tsx  —  Calendar (v3 Lavender)
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useCallback, useMemo, useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, Platform, Dimensions,
@@ -7,6 +7,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "expo-router";
+import { ctxDiningIdeas, ctxSuggestActivities, ctxRescheduleConflict } from "../context/ChatContextStore";
 import { C, R, S, USER_ID } from "../constants/config";
 import { useGet } from "../hooks/useApi";
 
@@ -28,14 +30,24 @@ function fmtTime(iso?:string) {
 
 function buildWeekGrid(events:Ev[]) {
   const today=new Date(); today.setHours(0,0,0,0);
+
+  // Start from Sunday of the current week so the full 7-day week is always
+  // visible — including past days like Sunday, Monday, Tuesday.
+  // Without this, the grid starts from today and the first half of the week
+  // is invisible even though those events exist in Google Calendar.
+  const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+  const weekStart = new Date(today.getTime() - dayOfWeek * 86400000);
+
   return Array.from({length:7},(_,i)=>{
-    const d=new Date(today.getTime()+i*86400000);
+    const d=new Date(weekStart.getTime()+i*86400000);
+    const isToday=d.toDateString()===today.toDateString();
+    const isPast=d<today;
     const dayEvs=events.filter(e=>{
       const s=evStart(e); return s&&s.toDateString()===d.toDateString()&&!isBirthday(e);
     }).sort((a,b)=>(evStart(a)?.getTime()||0)-(evStart(b)?.getTime()||0));
     return {
       date:d, short:d.toLocaleDateString("en-US",{weekday:"short"}),
-      dayNum:d.getDate(), isToday:i===0, events:dayEvs,
+      dayNum:d.getDate(), isToday, isPast, events:dayEvs,
     };
   });
 }
@@ -105,7 +117,14 @@ export default function CalendarScreen() {
   const [chatCtx,    setChatCtx]    = useState<{title:string;ctx:string}|null>(null);
 
   const calRes = useGet<{events:Ev[]}>(`/api/calendar?user_id=${USER_ID}`);
-  useEffect(()=>{ calRes.refetch(); },[]);
+
+  // Refetch every time the Calendar tab comes into focus
+  // This ensures new events added via Chat appear immediately
+  useFocusEffect(
+    useCallback(() => {
+      calRes.refetch();
+    }, [])
+  );
   const onRefresh=async()=>{ setRefresh(true); calRes.refetch(); setRefresh(false); };
 
   const events = calRes.data?.events||[];
@@ -113,7 +132,8 @@ export default function CalendarScreen() {
 
   const totalWeek   = grid.reduce((n,d)=>n+d.events.length,0);
   const busiestDay  = [...grid].sort((a,b)=>b.events.length-a.events.length)[0];
-  const freeEvenings= grid.filter(d=>!d.events.some(e=>{const s=evStart(e);return s&&s.getHours()>=17;})).length;
+  // Free evenings: only count today + future days (past evenings can't be planned)
+  const freeEvenings= grid.filter(d=>!d.isPast&&!d.events.some(e=>{const s=evStart(e);return s&&s.getHours()>=17;})).length;
   const conflicts:Array<{a:Ev;b:Ev;day:string}>=[];
   grid.forEach(d=>{ for(let i=0;i<d.events.length;i++) for(let j=i+1;j<d.events.length;j++){
     const aE=evEnd(d.events[i]),bS=evStart(d.events[j]);
@@ -184,7 +204,10 @@ export default function CalendarScreen() {
               <Text style={{fontWeight:"700"}}>{c.b.summary}</Text>
             </Text>
             <View style={{flexDirection:"row",gap:8}}>
-              <TouchableOpacity style={st.reschedBtn} onPress={()=>router.push("/(tabs)/chat")}>
+              <TouchableOpacity style={st.reschedBtn} onPress={()=>{
+                conflicts.length>0&&ctxRescheduleConflict(conflicts[0].a.summary||"Event A",conflicts[0].b.summary||"Event B",busiestDay.short);
+                router.push("/(tabs)/chat");
+              }}>
                 <Text style={st.reschedText}>🔁 Auto-Reschedule</Text>
               </TouchableOpacity>
               <TouchableOpacity style={st.ignoreBtn}>
@@ -202,8 +225,16 @@ export default function CalendarScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={st.heatmapRow}>
                 {grid.map((day,i)=>(
-                  <View key={i} style={[st.heatmapCol,day.isToday&&{borderColor:C.acc,borderWidth:1.5}]}>
-                    <View style={[st.heatmapHeader,day.isToday&&{backgroundColor:C.acc}]}>
+                  <View key={i} style={[
+                    st.heatmapCol,
+                    day.isToday&&{borderColor:C.acc,borderWidth:1.5},
+                    day.isPast&&{opacity:0.6},
+                  ]}>
+                    <View style={[
+                      st.heatmapHeader,
+                      day.isToday&&{backgroundColor:C.acc},
+                      day.isPast&&!day.isToday&&{backgroundColor:C.border2},
+                    ]}>
                       <Text style={[st.heatmapShort,day.isToday&&{color:"#fff"}]}>{day.short}</Text>
                       <Text style={[st.heatmapNum,day.isToday&&{color:"#fff"}]}>{day.dayNum}</Text>
                     </View>

@@ -7,6 +7,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { C, R, S, USER_ID } from "../constants/config";
+import { ctxDailyBriefing, ctxQuickAction } from "../context/ChatContextStore";
 import { useGet } from "../hooks/useApi";
 
 const MAX_W = 820;
@@ -304,7 +305,10 @@ export default function BriefingScreen() {
             )}
           </View>
           <Text style={st.briefText}>{briefing}</Text>
-          <TouchableOpacity style={st.briefCta} onPress={()=>router.push("/(tabs)/chat")}>
+          <TouchableOpacity style={st.briefCta} onPress={()=>{
+      ctxDailyBriefing(todayEvs.map(e=>e.summary||""), pending);
+      router.push("/(tabs)/chat");
+    }}>
             <Ionicons name="chatbubble-outline" size={12} color={C.acc}/>
             <Text style={st.briefCtaText}>Discuss with Family COO →</Text>
           </TouchableOpacity>
@@ -362,7 +366,17 @@ export default function BriefingScreen() {
           {actions.map((a,i)=>(
             <TouchableOpacity key={i}
               style={[st.actRow,i===actions.length-1&&{borderBottomWidth:0}]}
-              onPress={()=>router.push("/(tabs)/chat")}>
+              onPress={()=>{
+                const prompts:Record<string,string>={
+                  "Check Tampa traffic":`What is the current traffic situation in Tampa, FL? I have ${todayEvs.length} events today. Should I leave early for any of them?`,
+                  "Prep Patel Brothers list":"Help me build a Patel Brothers grocery list based on my family's Indian cuisine preferences. Include staples and any items for Paneer or lentil dishes.",
+                  "Review Ideas Inbox":"Review my pending ideas and help me decide which ones to convert into missions this week.",
+                };
+                const key=a.label;
+                const prompt=prompts[key]||`Help me with: ${key}`;
+                ctxQuickAction(a.label, prompt);
+                router.push("/(tabs)/chat");
+              }}>
               <Text style={{fontSize:18,width:26,textAlign:"center"}}>{a.emoji}</Text>
               <Text style={st.actLabel}>{a.label}</Text>
               <Ionicons name="chevron-forward" size={13} color={C.ink3}/>

@@ -674,6 +674,8 @@ def _parse_tomorrow_time(user_text: str, now: datetime.datetime) -> Optional[dat
 def _ensure_event_schema(parsed: Dict[str, Any], user_request: str, now: datetime.datetime) -> Dict[str, Any]:
     """
     Enforce the exact output contract keys and coerce events to schema.
+    All start_time / end_time values are normalised to America/New_York-aware
+    ISO strings (with UTC offset) so mission_log comparisons are unambiguous.
     """
     t = (parsed.get("type") or "chat").lower()
     if t not in {"plan", "conflict", "question", "confirmation", "chat", "error"}:
@@ -690,6 +692,26 @@ def _ensure_event_schema(parsed: Dict[str, Any], user_request: str, now: datetim
     events_in = parsed.get("events")
     if not isinstance(events_in, list):
         events_in = []
+
+    # ── Build ET-aware tzinfo from now (already ET-aware via _get_tz_now) ──────
+    et_tzinfo = now.tzinfo  # ZoneInfo("America/New_York") or None
+
+    def _attach_et(iso_str: str) -> str:
+        """Attach ET timezone to a naive ISO string; leave tz-aware strings alone."""
+        if not iso_str:
+            return iso_str
+        try:
+            import re as _re
+            # Already has offset (+HH:MM, -HH:MM, Z) → keep as-is
+            if _re.search(r'[Z+\-]\d{2}:?\d{2}$', iso_str) or iso_str.endswith('Z'):
+                return iso_str
+            # Naive string → attach ET tzinfo
+            dt = datetime.datetime.fromisoformat(iso_str)
+            if dt.tzinfo is None and et_tzinfo is not None:
+                dt = dt.replace(tzinfo=et_tzinfo)
+            return dt.isoformat(timespec='seconds')
+        except Exception:
+            return iso_str
 
     events_out: List[Dict[str, str]] = []
     for ev in events_in:
@@ -709,9 +731,12 @@ def _ensure_event_schema(parsed: Dict[str, Any], user_request: str, now: datetim
                 start_time = dt.strftime("%Y-%m-%dT%H:%M:%S")
                 end_time = _default_end_time(dt, 60).strftime("%Y-%m-%dT%H:%M:%S")
             else:
-                # Keep empty strings (schema-valid). Flow/UI should gate execution anyway.
                 start_time = start_time or ""
                 end_time = end_time or ""
+
+        # ── Always attach ET timezone so the stored string is unambiguous ──────
+        start_time = _attach_et(start_time)
+        end_time   = _attach_et(end_time)
 
         events_out.append(
             {

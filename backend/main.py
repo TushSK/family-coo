@@ -30,13 +30,78 @@ import sys
 import tomllib
 from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone as _tz_utc, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+
+# ── Timezone helper ────────────────────────────────────────────────────────────
+# Tampa, FL is in America/New_York (ET).
+# Standard offset: EST = UTC-5, EDT = UTC-4 (DST Mar–Nov).
+# The LLM generates naive ISO strings like "2025-03-17T17:30:00".
+# PostgreSQL (Supabase) timestamps WITHOUT offset are treated as UTC — so a naive
+# 5:30 PM string lands in the DB as 5:30 PM UTC = 1:30 PM ET → shown OVERDUE too early.
+# This function converts any naive or tz-aware ISO string → UTC ISO with Z suffix
+# so every end_time stored in mission_log is unambiguous UTC.
+def _to_utc_iso(time_str: str) -> str:
+    """
+    Normalise an event time string to UTC ISO-8601 (with Z suffix).
+
+    Rules:
+    - If the string already carries a UTC offset (±HH:MM or Z) → convert to UTC.
+    - If the string is naive (no offset) → assume America/New_York (ET) and convert.
+    - EDT (Mar 2nd Sun – Nov 1st Sun) = UTC-4; EST = UTC-5. We auto-detect DST.
+    - Falls back to returning the original string unchanged on any parse error.
+    """
+    if not time_str:
+        return time_str
+    try:
+        # Try dateutil for robust parsing (handles many formats)
+        try:
+            from dateutil import parser as _dtparser
+            dt = _dtparser.parse(time_str)
+        except Exception:
+            # stdlib fallback for bare ISO format
+            for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"):
+                try:
+                    dt = datetime.strptime(time_str, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                return time_str  # cannot parse at all
+
+        if dt.tzinfo is None:
+            # Naive → assume America/New_York (ET)
+            try:
+                from zoneinfo import ZoneInfo
+                et_tz = ZoneInfo("America/New_York")
+                dt = dt.replace(tzinfo=et_tz)
+            except Exception:
+                # zoneinfo not available (Python < 3.9) → manual DST offset
+                # DST: 2nd Sunday March 02:00 → 1st Sunday November 02:00
+                year = dt.year
+                # 2nd Sunday in March
+                mar1 = datetime(year, 3, 1)
+                dst_start = mar1 + timedelta(days=(6 - mar1.weekday()) % 7 + 7)
+                # 1st Sunday in November
+                nov1 = datetime(year, 11, 1)
+                dst_end = nov1 + timedelta(days=(6 - nov1.weekday()) % 7)
+                is_dst = dst_start <= dt.replace(tzinfo=None) < dst_end
+                offset = timedelta(hours=-4 if is_dst else -5)
+                dt = dt.replace(tzinfo=_tz_utc.utc) - offset  # convert to UTC manually
+                # dt is now in UTC — return directly
+                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Convert to UTC
+        dt_utc = dt.astimezone(_tz_utc.utc)
+        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return time_str  # safe fallback — return unchanged
 
 # -- locate project root & load secrets ---------------------------------------
 PROJECT_ROOT  = Path(__file__).resolve().parent.parent
@@ -98,12 +163,32 @@ def get_db() -> SupabaseClient:
 
 # -- Google Calendar helper ---------------------------------------------------
 def _get_gcal_service(user_id: str):
-    try:
-        import urllib.parse, urllib.request as urlreq
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request as GRequest
-        from googleapiclient.discovery import build
+    """
+    Returns a Google Calendar service or None.
 
+    Token resolution order (most-to-least preferred):
+      1. Supabase user_tokens table  (primary — works on any device/deploy)
+      2. gcal_token.json             (local dev fallback — never used on Render)
+      3. None → caller gets empty calendar, never raises
+
+    On every successful load, if the access token is expired the function
+    auto-refreshes it via the refresh_token and writes the new token back to
+    whichever store it came from, so the next call is instant.
+    """
+    import urllib.parse, urllib.request as urlreq
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request as GRequest
+    from googleapiclient.discovery import build
+
+    google_cfg    = _SECRETS.get("google_oauth", {})
+    client_id     = os.environ.get("GOOGLE_CLIENT_ID")     or google_cfg.get("client_id",     "")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or google_cfg.get("client_secret", "")
+
+    token_data: Optional[dict] = None
+    token_source: str = "none"
+
+    # ── 1. Try Supabase ───────────────────────────────────────────────────────
+    try:
         q_user     = urllib.parse.quote(user_id)
         q_provider = urllib.parse.quote("google_calendar")
         url = (
@@ -116,44 +201,90 @@ def _get_gcal_service(user_id: str):
         })
         with urlreq.urlopen(req, timeout=10) as resp:
             rows = json.loads(resp.read().decode())
-        if not rows:
-            return None
+        if rows:
+            td = rows[0].get("token_json") or {}
+            if isinstance(td, str):
+                td = json.loads(td)
+            if td.get("refresh_token"):          # only use if it has a refresh_token
+                token_data   = td
+                token_source = "supabase"
+    except Exception:
+        pass  # Supabase unreachable → fall through to local
 
-        token_data = rows[0].get("token_json") or {}
-        if isinstance(token_data, str):
-            token_data = json.loads(token_data)
+    # ── 2. Local fallback (gcal_token.json) ───────────────────────────────────
+    if not token_data:
+        for path in ["gcal_token.json", "token.json"]:
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as _f:
+                        td = json.load(_f)
+                    if td.get("refresh_token"):
+                        token_data   = td
+                        token_source = f"local:{path}"
+                        break
+                except Exception:
+                    pass
 
-        # Env vars take priority on Render; fall back to secrets.toml locally
-        google_cfg    = _SECRETS.get("google_oauth", {})
-        client_id     = os.environ.get("GOOGLE_CLIENT_ID")     or google_cfg.get("client_id", "")
-        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or google_cfg.get("client_secret", "")
+    if not token_data:
+        return None  # no token anywhere
 
+    try:
         creds = Credentials(
-            token=token_data.get("token"),
-            refresh_token=token_data.get("refresh_token"),
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
+            token         = token_data.get("token"),
+            refresh_token = token_data.get("refresh_token"),
+            token_uri     = "https://oauth2.googleapis.com/token",
+            client_id     = client_id     or token_data.get("client_id",     ""),
+            client_secret = client_secret or token_data.get("client_secret", ""),
         )
-        if creds.expired and creds.refresh_token:
-            creds.refresh(GRequest())
-            # Persist refreshed token back to Supabase
+
+        # Refresh if expired (access tokens last ~1 hour; refresh_token is long-lived)
+        if not creds.valid and creds.refresh_token:
             try:
-                import json as _j
-                refreshed = _j.loads(creds.to_json())
-                patch_url = (f"{SUPABASE_URL}/rest/v1/user_tokens"
-                             f"?user_id=eq.{q_user}&provider=eq.{q_provider}")
-                patch_req = urlreq.Request(patch_url,
-                    data=_j.dumps({"token_json": refreshed}).encode(),
-                    headers={
-                        "apikey": SUPABASE_SERVICE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                        "Content-Type": "application/json",
-                        "Prefer": "return=minimal",
-                    }, method="PATCH")
-                urlreq.urlopen(patch_req, timeout=5)
+                creds.refresh(GRequest())
+                refreshed = json.loads(creds.to_json())
+
+                # Write refreshed token back to whichever store we used
+                if token_source == "supabase":
+                    try:
+                        q_user     = urllib.parse.quote(user_id)
+                        q_provider = urllib.parse.quote("google_calendar")
+                        patch_url  = (f"{SUPABASE_URL}/rest/v1/user_tokens"
+                                      f"?user_id=eq.{q_user}&provider=eq.{q_provider}")
+                        patch_req  = urlreq.Request(patch_url,
+                            data    = json.dumps({"token_json": refreshed}).encode(),
+                            headers = {
+                                "apikey":        SUPABASE_SERVICE_KEY,
+                                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                                "Content-Type":  "application/json",
+                                "Prefer":        "return=minimal",
+                            }, method="PATCH")
+                        urlreq.urlopen(patch_req, timeout=5)
+                    except Exception:
+                        pass
+                else:
+                    # Local file — overwrite with fresh token
+                    local_path = token_source.split(":", 1)[-1] if ":" in token_source else "gcal_token.json"
+                    try:
+                        with open(local_path, "w", encoding="utf-8") as _f:
+                            json.dump(refreshed, _f)
+                    except Exception:
+                        pass
+                    # Also try to seed Supabase so it works next deploy
+                    try:
+                        seed_url = f"{SUPABASE_URL}/rest/v1/user_tokens"
+                        seed_req = urlreq.Request(seed_url,
+                            data    = json.dumps({"user_id": user_id, "provider": "google_calendar", "token_json": refreshed}).encode(),
+                            headers = {
+                                "apikey":        SUPABASE_SERVICE_KEY,
+                                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                                "Content-Type":  "application/json",
+                                "Prefer":        "resolution=merge-duplicates,return=minimal",
+                            }, method="POST")
+                        urlreq.urlopen(seed_req, timeout=5)
+                    except Exception:
+                        pass
             except Exception:
-                pass
+                pass  # refresh failed — try with possibly-expired token anyway
 
         return build("calendar", "v3", credentials=creds, cache_discovery=False)
     except Exception:
@@ -295,14 +426,38 @@ def _save_chat_turn(db: SupabaseClient, user_id: str, role: str, content: str, m
 
 def _gcal_upcoming(service) -> list:
     try:
-        from datetime import timezone
-        now    = datetime.now(timezone.utc).isoformat()
+        from datetime import timezone, timedelta
+        now = datetime.now(timezone.utc)
+
+        # Start from Sunday midnight of the CURRENT WEEK (ET) so the full
+        # 7-day grid (Sun–Sat) is always populated — including past days like
+        # Sunday, Monday, Tuesday when today is mid-week.
+        # The frontend buildWeekGrid() shows Sun–Sat, so the API window must match.
+        try:
+            from zoneinfo import ZoneInfo
+            et = ZoneInfo("America/New_York")
+            now_et = datetime.now(et)
+            # Go back to Sunday (weekday 6 in isoweekday, but 0 in .weekday() Mon-based)
+            # .weekday(): Mon=0 … Sun=6  →  days_since_sunday = (weekday + 1) % 7
+            days_since_sunday = (now_et.weekday() + 1) % 7
+            week_sunday = now_et.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) - timedelta(days=days_since_sunday)
+            time_min = week_sunday.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            # Fallback: 7 days ago from now
+            time_min = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Fetch through end of next week so weekend planner always has data
+        time_max = (now + timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         result = service.events().list(
-            calendarId="primary",
-            timeMin=now,
-            maxResults=60,
-            singleEvents=True,
-            orderBy="startTime",
+            calendarId  = "primary",
+            timeMin     = time_min,
+            timeMax     = time_max,
+            maxResults  = 100,
+            singleEvents= True,
+            orderBy     = "startTime",
         ).execute()
         return result.get("items", [])
     except Exception:
@@ -407,11 +562,16 @@ def add_calendar_event(req: AddEventRequest, db: SupabaseClient = Depends(get_db
         event = svc.events().insert(calendarId="primary", body=body).execute()
         uid = _get_user_uuid(db, req.user_id)
         if uid:
+            # ── FIX: Normalize to UTC before storing so isPast() is always correct.
+            # The LLM emits naive ISO strings (no TZ offset); Supabase would treat
+            # them as UTC, making a 5:30 PM ET event appear as 5:30 PM UTC (=1:30 PM ET)
+            # and mark it OVERDUE 4 hours too early.
+            end_utc = _to_utc_iso(req.end_time)
             db.table("mission_log").insert({
                 "user_id":   uid,
                 "source_id": event.get("id"),
                 "title":     req.title,
-                "end_time":  req.end_time,
+                "end_time":  end_utc,
                 "status":    "pending",
             }).execute()
         return {"success": True, "event_id": event.get("id"), "event": event}
@@ -462,6 +622,43 @@ def get_memory(user_id: str, db: SupabaseClient = Depends(get_db)):
             return {"memory": {}, "ideas": []}
         row = res.data[0]
         return {"memory": row.get("memory") or {}, "ideas": row.get("ideas") or []}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+class IdeasSyncRequest(BaseModel):
+    user_id: str
+    ideas:   List[Dict]
+
+
+@app.get("/api/memory/ideas")
+def get_ideas(user_id: str, db: SupabaseClient = Depends(get_db)):
+    """Return the ideas array stored in user_memory for this user."""
+    try:
+        res = db.table("user_memory").select("ideas").eq("email", user_id).execute()
+        if not res.data:
+            return {"ideas": []}
+        return {"ideas": res.data[0].get("ideas") or []}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/memory/ideas")
+def save_ideas(req: IdeasSyncRequest, db: SupabaseClient = Depends(get_db)):
+    """
+    Upsert the full ideas list into user_memory.ideas.
+    This is the Supabase source-of-truth for ideas — AsyncStorage is just
+    a local cache. On every add/remove/convert, the client POSTs the full
+    array here so it survives cache clears, reinstalls, and device switches.
+    """
+    try:
+        # Check if the user row already exists
+        existing = db.table("user_memory").select("email").eq("email", req.user_id).execute()
+        if existing.data:
+            db.table("user_memory").update({"ideas": req.ideas}).eq("email", req.user_id).execute()
+        else:
+            db.table("user_memory").insert({"email": req.user_id, "ideas": req.ideas}).execute()
+        return {"success": True, "count": len(req.ideas)}
     except Exception as e:
         raise HTTPException(500, str(e))
 
