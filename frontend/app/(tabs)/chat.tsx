@@ -14,11 +14,18 @@ import { ChatContextStore } from "../context/ChatContextStore";
 interface Message {
   id:string; role:"user"|"assistant"; content:string;
   type?:string; events?:any[]; options?:Option[];
+  // Feedback state — stored per message in local React state map
+  // (not in the array itself to avoid re-render cascade)
 }
 interface BrainResponse { type:string; text:string; pre_prep:string; events:any[]; }
 interface Option {
   key:string; title:string; time_window:string;
   duration_hours:number; notes:string;
+}
+interface PivotChip {
+  emoji: string;
+  label: string;
+  prompt: string;   // silent prompt sent to AI — no typing needed
 }
 
 // ── Parse OPTIONS_JSON from pre_prep ─────────────────────────────────────────
@@ -96,6 +103,92 @@ function parseOptionsFromText(text: string): Option[] {
 }
 
 // ── Add event to calendar ─────────────────────────────────────────────────────
+// ── Pivot chip generator ──────────────────────────────────────────────────────
+// Derives context-aware chips from the AI message content and options.
+// Chips let the user redirect the AI with ONE tap — no typing needed.
+function generatePivotChips(msg: Message): PivotChip[] {
+  const t = (msg.content || "").toLowerCase();
+  const chips: PivotChip[] = [];
+
+  const hasOptions = (msg.options?.filter(o => o.key !== "custom").length ?? 0) > 0;
+  const isSat      = t.includes("saturday");
+  const isSun      = t.includes("sunday");
+  const isOutdoor  = t.includes("outdoor") || t.includes("hike") || t.includes("park") || t.includes("kayak");
+  const isDinner   = t.includes("dinner") || t.includes("cook") || t.includes("food") || t.includes("meal") || t.includes("takeout");
+  const isMission  = t.includes("mission") || t.includes("priority") || t.includes("task");
+  const isWeekend  = t.includes("weekend") || isSat || isSun;
+  const isMorning  = t.includes("9:00") || t.includes("10:00") || t.includes("morning");
+  const isAfternoon= t.includes("2:00") || t.includes("3:00") || t.includes("afternoon");
+
+  if (isWeekend || isOutdoor) {
+    if (isSat && !isSun)
+      chips.push({emoji:"☀️", label:"Try Sunday", prompt:"Saturday options don't work. Suggest 2 fresh options for this Sunday — same family context (Drishti joining, Tampa, 30mi radius)."});
+    if (isSun && !isSat)
+      chips.push({emoji:"🗓️", label:"Try Saturday", prompt:"Sunday doesn't work. Suggest 2 options for this Saturday instead — same family context."});
+    if (isOutdoor)
+      chips.push({emoji:"🏠", label:"Indoor instead", prompt:"Prefer something indoors. Suggest 2 indoor family-friendly options in Tampa — museum, activity centre, or cultural venue."});
+    if (isMorning)
+      chips.push({emoji:"🌤️", label:"Afternoon slot", prompt:"Morning doesn't work. Suggest the same type of outing but in the afternoon (2–6 PM) instead."});
+    if (isAfternoon)
+      chips.push({emoji:"🌅", label:"Morning instead", prompt:"Afternoon doesn't work. Suggest the same type of outing in the morning (9 AM–1 PM) instead."});
+    if (chips.length < 3)
+      chips.push({emoji:"👫", label:"Just adults", prompt:"Drishti won't be joining today. Suggest 2 adult-only options — more relaxed, could include dining or a cultural experience."});
+    if (chips.length < 4)
+      chips.push({emoji:"🗺️", label:"Closer to home", prompt:"Something within 10 miles of Tampa would be better. Suggest 2 very nearby options we can reach in 15 minutes."});
+  }
+
+  if (isDinner) {
+    chips.push({emoji:"⚡", label:"Quick & easy", prompt:"Need something faster tonight. Suggest a quick dinner — 20-min home cook or fast delivery. Indian food preferred."});
+    chips.push({emoji:"🥗", label:"Something lighter", prompt:"Prefer a lighter meal. Suggest a simple healthy Indian or vegetarian dinner — home cook or light takeout."});
+    chips.push({emoji:"🛵", label:"Just order out", prompt:"Don't want to cook. Best Indian takeout near Tampa tonight — specific dish recommendations."});
+    chips.push({emoji:"🍳", label:"Use what we have", prompt:"Suggest a quick Indian meal from pantry staples — no grocery run. Dal, rice, or a simple sabzi."});
+  }
+
+  if (isMission) {
+    chips.push({emoji:"😴", label:"Snooze all", prompt:"Can't tackle any missions today. Snooze everything by 1 day and tell me what to prioritise first tomorrow morning."});
+    chips.push({emoji:"⚡", label:"Quickest win", prompt:"What's the single fastest mission I can complete in under 15 minutes right now? Just one — be specific."});
+    chips.push({emoji:"📋", label:"Show all", prompt:"Show ALL my pending missions with due dates sorted by urgency. Don't filter — show everything."});
+  }
+
+  if (chips.length === 0 || hasOptions) {
+    chips.push({emoji:"🔄", label:"New options", prompt:"None of these options work. Give me 2 completely different alternatives — different activity type, different timing."});
+  }
+  chips.push({emoji:"🎯", label:"More detail", prompt:"Give me more specific details for the best option — exact time, exact location, what to bring, and why it fits our family."});
+
+  return chips.slice(0, 4);
+}
+
+// ── Chat bubble feedback helper (fire-and-forget) ────────────────────────────
+async function postChatFeedback(
+  rating:     "thumbs_up"|"thumbs_down",
+  msgContent: string,
+  options:    Option[],
+  pivotLabel: string = "",
+) {
+  try {
+    const optionTitles = options
+      .filter(o => o.key !== "custom")
+      .map(o => o.title)
+      .join(" | ");
+    await fetch(`${API_BASE}/api/feedback`, {
+      method:  "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        user_id:               USER_ID,
+        mission:               msgContent.slice(0, 120),
+        feedback:              rating === "thumbs_up"
+                                 ? "User liked this response"
+                                 : `User redirected: ${pivotLabel || "thumbs down"}`,
+        rating,
+        feedback_type:         `chat_${rating}`,
+        reason:                pivotLabel,
+        good_response_text:    rating === "thumbs_up" ? msgContent.slice(0, 300) : "",
+        good_response_options: rating === "thumbs_up" ? optionTitles : "",
+      }),
+    });
+  } catch {}
+}
+
 async function addEventToCalendar(event: any): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/api/calendar/add`, {
@@ -113,9 +206,80 @@ async function addEventToCalendar(event: any): Promise<boolean> {
   } catch { return false; }
 }
 
-const DEFAULT_CHIPS = [
-  "Plan this weekend 🎉","What's on today? 📅",
-  "Add family outing 🌳","Suggest dinner idea 🍽️","Review my missions ✅",
+// ── Quick-action chips ────────────────────────────────────────────────────────
+// Each chip sends a silent structured prompt that forces the AI to output
+// immediate A/B/C tappable cards — no follow-up typing needed.
+// The [QUICK_ACTION: tag] prefix signals the AI (via prompts.py) to skip
+// all clarifying questions and commit to a plan using full calendar + memory.
+interface Chip { label:string; emoji:string; prompt:string; }
+
+const QUICK_CHIPS: Chip[] = [
+  {
+    label: "Plan Weekend",
+    emoji: "🎉",
+    prompt:
+      `[QUICK_ACTION: plan_weekend]\n` +
+      `Look at my calendar and suggest the 2 best options for this weekend based on my preferences.\n` +
+      `RULES:\n` +
+      `- Output A/B/C immediately. No follow-up questions.\n` +
+      `- (A) = Saturday activity, (B) = Sunday activity, (C) = Custom.\n` +
+      `- Use my Ideas Inbox first (Hillsborough River hike, Ybor City market, kayaking, Indian cultural events).\n` +
+      `- Family context: Drishti is joining. We love outdoors, Indian culture, family-friendly spots in Tampa.\n` +
+      `- Each option needs: title, When (specific time), Where, Notes (1 line why it fits us).`,
+  },
+  {
+    label: "Today's Plan",
+    emoji: "📅",
+    prompt:
+      `[QUICK_ACTION: today_briefing]\n` +
+      `Give me a smart briefing for today using my calendar and pending missions.\n` +
+      `RULES:\n` +
+      `- Output A/B/C immediately. No follow-up questions.\n` +
+      `- If I have events today: (A) = prepare for the next event (what to do RIGHT NOW), (B) = top pending mission to tackle today.\n` +
+      `- If today is clear: (A) = best mission to complete today, (B) = plan something for this evening.\n` +
+      `- (C) = Custom — let me decide.\n` +
+      `- Keep the intro to 1 sentence. Then straight into the options.`,
+  },
+  {
+    label: "Family Outing",
+    emoji: "🌳",
+    prompt:
+      `[QUICK_ACTION: family_outing]\n` +
+      `I want to schedule a family outing from my Ideas Inbox.\n` +
+      `RULES:\n` +
+      `- Output A/B/C immediately. No follow-up questions.\n` +
+      `- Pick the 2 best ideas from my inbox: Hillsborough River State Park Hike, Ybor City Sunday Market, kayaking nearby, Indian cultural events, spring break attractions.\n` +
+      `- (A) = this Saturday, (B) = this Sunday, (C) = Custom time.\n` +
+      `- Drishti is joining. Keep within 30 miles of Tampa. Morning or afternoon window.\n` +
+      `- Each option needs specific time (e.g. 9:00 AM – 1:00 PM), location, and 1-line why.`,
+  },
+  {
+    label: "Dinner Tonight",
+    emoji: "🍽️",
+    prompt:
+      `[QUICK_ACTION: dinner_tonight]\n` +
+      `Suggest dinner for tonight.\n` +
+      `RULES:\n` +
+      `- Output A/B/C immediately. No follow-up questions.\n` +
+      `- (A) = home cook — an Indian dish we can make tonight (e.g. Paneer Butter Masala, Dal Tadka, Chole Bhature). Include approx prep time.\n` +
+      `- (B) = Indian takeout or restaurant in Tampa — suggest a specific type of order (e.g. biryani from an Indian place). Include ETA estimate.\n` +
+      `- (C) = Something else — Custom.\n` +
+      `- Keep it practical. We prefer Indian cuisine.`,
+  },
+  {
+    label: "My Missions",
+    emoji: "✅",
+    prompt:
+      `[QUICK_ACTION: mission_review]\n` +
+      `Review my active missions and tell me what to focus on.\n` +
+      `RULES:\n` +
+      `- Output A/B/C immediately. No follow-up questions.\n` +
+      `- 1 sentence summary of what's most urgent based on due dates.\n` +
+      `- (A) = top priority mission — what exactly to do in the next 1 hour.\n` +
+      `- (B) = second priority mission — what exactly to do today.\n` +
+      `- (C) = Snooze everything by 1 day — I'll handle it tomorrow.\n` +
+      `- Be specific. Name the actual mission titles.`,
+  },
 ];
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
@@ -275,13 +439,27 @@ function TypingDots() {
 }
 
 // ── Bubble ────────────────────────────────────────────────────────────────────
-function Bubble({ msg, onDismissEvent, onSelectOption, onCustomOption }:{
+function Bubble({ msg, onDismissEvent, onSelectOption, onCustomOption, onPivotChip, onFeedback }:{
   msg:Message;
   onDismissEvent:(id:string,i:number)=>void;
   onSelectOption:(opt:Option)=>void;
   onCustomOption:()=>void;
+  onPivotChip:(prompt:string, label:string)=>void;
+  onFeedback:(msgId:string, rating:"thumbs_up"|"thumbs_down", label?:string)=>void;
 }) {
   const isUser=msg.role==="user", isErr=msg.type==="error";
+  const [fb, setFb]           = useState<"up"|"down"|null>(null);
+  const [showPivots, setShowPivots] = useState(false);
+
+  const pivotChips = !isUser && !isErr ? generatePivotChips(msg) : [];
+
+  function handleThumb(rating: "thumbs_up"|"thumbs_down") {
+    if (fb) return; // already voted
+    setFb(rating === "thumbs_up" ? "up" : "down");
+    if (rating === "thumbs_down") setShowPivots(true);
+    onFeedback(msg.id, rating);
+  }
+
   return (
     <View style={[st.bubbleRow, isUser&&st.bubbleRowUser]}>
       {!isUser&&<View style={st.avatar}><Text style={{fontSize:14}}>🏠</Text></View>}
@@ -290,13 +468,15 @@ function Bubble({ msg, onDismissEvent, onSelectOption, onCustomOption }:{
           <MdText text={msg.content}
             style={[st.bubbleText,isUser&&{color:"#fff"},isErr&&{color:C.red}]}/>
         </View>
+
         {/* Draft event cards */}
         {!isUser&&msg.events?.map((ev,i)=>(
           <DraftCard key={i} event={ev}
             onAdd={async()=>{ await addEventToCalendar(ev); }}
             onDismiss={()=>onDismissEvent(msg.id,i)}/>
         ))}
-        {/* Option A / B / C / Custom — rendered as touchable cards */}
+
+        {/* Option A / B / C / Custom cards */}
         {!isUser&&msg.options&&msg.options.length>0&&(
           <View style={{gap:7,width:"100%"}}>
             {msg.options.map(opt=>(
@@ -304,6 +484,68 @@ function Bubble({ msg, onDismissEvent, onSelectOption, onCustomOption }:{
                 onSelect={onSelectOption}
                 onCustom={onCustomOption}/>
             ))}
+          </View>
+        )}
+
+        {/* ── Thumbs feedback row — shown on every AI bubble ─────────────── */}
+        {!isUser&&!isErr&&(
+          <View style={st.feedbackRow}>
+            {/* Thumbs */}
+            <TouchableOpacity
+              style={[st.thumbBtn, fb==="up"&&st.thumbBtnUp]}
+              onPress={()=>handleThumb("thumbs_up")}
+              activeOpacity={0.7}>
+              <Ionicons
+                name={fb==="up" ? "thumbs-up" : "thumbs-up-outline"}
+                size={13}
+                color={fb==="up" ? C.green : C.ink3}/>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[st.thumbBtn, fb==="down"&&st.thumbBtnDown]}
+              onPress={()=>handleThumb("thumbs_down")}
+              activeOpacity={0.7}>
+              <Ionicons
+                name={fb==="down" ? "thumbs-down" : "thumbs-down-outline"}
+                size={13}
+                color={fb==="down" ? C.red : C.ink3}/>
+            </TouchableOpacity>
+
+            {/* Voted label */}
+            {fb==="up"&&(
+              <Text style={st.fbLabel}>Saved as a good response ✓</Text>
+            )}
+            {fb==="down"&&!showPivots&&(
+              <TouchableOpacity onPress={()=>setShowPivots(true)}>
+                <Text style={[st.fbLabel,{color:C.acc}]}>Redirect →</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
+        {/* ── Pivot chips — shown after thumbs-down OR proactively after options ─ */}
+        {!isUser&&!isErr&&(pivotChips.length>0)&&(showPivots||(fb===null&&msg.options&&msg.options.length>1))&&(
+          <View style={st.pivotWrap}>
+            <Text style={st.pivotLabel}>
+              {fb==="down" ? "WHAT WOULD WORK BETTER?" : "QUICK PIVOT"}
+            </Text>
+            <View style={st.pivotRow}>
+              {pivotChips.map((chip,i)=>(
+                <TouchableOpacity
+                  key={i}
+                  style={[st.pivotChip, fb==="down"&&st.pivotChipActive]}
+                  onPress={()=>{
+                    onPivotChip(chip.prompt, chip.label);
+                    if (fb===null) {
+                      setFb("down");
+                      onFeedback(msg.id, "thumbs_down", chip.label);
+                    }
+                  }}
+                  activeOpacity={0.72}>
+                  <Text style={st.pivotEmoji}>{chip.emoji}</Text>
+                  <Text style={st.pivotText}>{chip.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         )}
       </View>
@@ -329,6 +571,9 @@ export default function ChatScreen() {
   const [customAct,   setCustomAct]   = useState("");
   const [customTime,  setCustomTime]  = useState("");
   const [customLoc,   setCustomLoc]   = useState("");
+
+  // Per-message feedback state — kept outside Message[] to avoid re-render cascade
+  const [feedbackMap, setFeedbackMap] = useState<Record<string,"up"|"down">>({});
 
   const listRef = useRef<FlatList>(null);
   const scrollToBottom = useCallback(()=>{
@@ -359,8 +604,14 @@ export default function ChatScreen() {
       });
       // Primary: OPTIONS_JSON in pre_prep. Fallback: parse prose (A/B/C, numbered, bold).
       // NOTE: must check .length — [] is truthy in JS, so || would short-circuit wrongly.
-      const _primary1 = parseOptions(res.pre_prep || "");
-      const options = _primary1.length > 0 ? _primary1 : parseOptionsFromText(res.text || "");
+      // Only parse options for question/conflict types.
+      // plan/confirmation/chat responses must never show option cards —
+      // they either have a DraftCard already, or are plain conversation.
+      const _shouldParseOpts1 = (res.type === "question" || res.type === "conflict");
+      const _primary1 = _shouldParseOpts1 ? parseOptions(res.pre_prep || "") : [];
+      const options = _primary1.length > 0
+        ? _primary1
+        : (_shouldParseOpts1 ? parseOptionsFromText(res.text || "") : []);
       const customOpt: Option = {
         key:"custom", title:"Something else — enter my own details",
         time_window:"", duration_hours:0, notes:"",
@@ -398,10 +649,14 @@ export default function ChatScreen() {
         chat_history:chatHistory, idea_options:ideaOptions,
         current_location:"Tampa, FL",
       });
-      // Primary: OPTIONS_JSON in pre_prep. Fallback: parse prose (A/B/C, numbered, bold).
-      // NOTE: must check .length — [] is truthy in JS, so || would short-circuit wrongly.
-      const _primary2 = parseOptions(res.pre_prep||"");
-      const options = _primary2.length > 0 ? _primary2 : parseOptionsFromText(res.text||"");
+      // Only parse options for question/conflict types.
+      // plan/confirmation/chat responses must never show option cards —
+      // they either have a DraftCard already, or are plain conversation.
+      const _shouldParseOpts2 = (res.type === "question" || res.type === "conflict");
+      const _primary2 = _shouldParseOpts2 ? parseOptions(res.pre_prep||"") : [];
+      const options = _primary2.length > 0
+        ? _primary2
+        : (_shouldParseOpts2 ? parseOptionsFromText(res.text||"") : []);
       const customOpt:Option={
         key:"custom", title:"Something else — enter my own details",
         time_window:"", duration_hours:0, notes:"",
@@ -428,6 +683,25 @@ export default function ChatScreen() {
     setMessages(prev=>prev.map(m=>m.id===msgId
       ? {...m,events:m.events?.filter((_,i)=>i!==evIdx)} : m));
   };
+
+  // ── Pivot chip handler — silently sends a redirect prompt ──────────────────
+  const handlePivotChip = useCallback((prompt: string, label: string) => {
+    setCtxLabel(`Redirecting: ${label}`);
+    sendSilent(prompt);
+  }, [sendSilent]);
+
+  // ── Feedback handler — records thumbs + stores good responses ──────────────
+  const handleFeedback = useCallback((
+    msgId: string,
+    rating: "thumbs_up"|"thumbs_down",
+    pivotLabel: string = "",
+  ) => {
+    setFeedbackMap(prev => ({...prev, [msgId]: rating === "thumbs_up" ? "up" : "down"}));
+    const msg = messages.find(m => m.id === msgId);
+    if (!msg) return;
+    const opts = msg.options || [];
+    postChatFeedback(rating, msg.content, opts, pivotLabel);
+  }, [messages]);
 
   const handleSelectOption=(opt:Option)=>{
     const now = new Date();
@@ -456,7 +730,6 @@ export default function ChatScreen() {
   };
 
   const canSend = input.trim().length>0 && !loading;
-  const chips = DEFAULT_CHIPS;
 
   return (
     <SafeAreaView style={st.safe}>
@@ -489,21 +762,27 @@ export default function ChatScreen() {
             <Bubble msg={item}
               onDismissEvent={dismissEvent}
               onSelectOption={handleSelectOption}
-              onCustomOption={()=>{
-                // Fix #3: directly open modal — no chat-loop round trip
-                setShowCustom(true);
-              }}/>
+              onCustomOption={()=>setShowCustom(true)}
+              onPivotChip={handlePivotChip}
+              onFeedback={handleFeedback}/>
           )}
           onContentSizeChange={scrollToBottom}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={loading?<TypingDots/>:null}
           ListHeaderComponent={showChips?(
             <View style={st.chipsWrap}>
-              <Text style={st.chipsLabel}>SUGGESTED</Text>
+              <Text style={st.chipsLabel}>QUICK ACTIONS</Text>
               <View style={st.chipsRow}>
-                {chips.map(c=>(
-                  <TouchableOpacity key={c} style={st.chip} onPress={()=>send(c)}>
-                    <Text style={st.chipText}>{c}</Text>
+                {QUICK_CHIPS.map(chip=>(
+                  <TouchableOpacity
+                    key={chip.label}
+                    style={st.chip}
+                    onPress={()=>{
+                      setCtxLabel(chip.label);
+                      sendSilent(chip.prompt);
+                    }}>
+                    <Text style={st.chipEmoji}>{chip.emoji}</Text>
+                    <Text style={st.chipText}>{chip.label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -634,9 +913,12 @@ const st = StyleSheet.create({
   listContent: {paddingHorizontal:14,paddingTop:12,paddingBottom:8},
   chipsWrap:   {paddingBottom:14,gap:7},
   chipsLabel:  {fontSize:10,fontWeight:"700",color:C.ink3,letterSpacing:1,paddingLeft:2},
-  chipsRow:    {flexDirection:"row",flexWrap:"wrap",gap:7},
-  chip:        {paddingHorizontal:13,paddingVertical:7,backgroundColor:C.bgCard,borderRadius:R.full,borderWidth:0.5,borderColor:C.border},
-  chipText:    {fontSize:12,color:C.acc,fontWeight:"600"},
+  chipsRow:    {flexDirection:"row",flexWrap:"wrap",gap:8},
+  chip:        {flexDirection:"row",alignItems:"center",gap:6,paddingHorizontal:14,paddingVertical:9,
+                backgroundColor:C.bgCard,borderRadius:R.full,borderWidth:0.5,borderColor:C.border,
+                shadowColor:"#6D28D9",shadowOffset:{width:0,height:1},shadowOpacity:0.06,shadowRadius:3,elevation:1},
+  chipEmoji:   {fontSize:14},
+  chipText:    {fontSize:12,color:C.acc,fontWeight:"700"},
   bubbleRow:   {flexDirection:"row",alignItems:"flex-end",marginBottom:13,gap:8},
   bubbleRowUser:{flexDirection:"row-reverse"},
   avatar:      {width:30,height:30,borderRadius:15,backgroundColor:C.soft,borderWidth:0.5,borderColor:C.border,alignItems:"center",justifyContent:"center"},
@@ -690,6 +972,34 @@ const st = StyleSheet.create({
   optFooterCustom:{backgroundColor:"transparent",borderWidth:0.5,borderColor:C.amberB},
   optFooterAdded: {backgroundColor:C.greenS,borderWidth:0.5,borderColor:C.greenB},
   optFooterText:  {fontSize:12,fontWeight:"700",color:"#fff"},
+
+  // ── Feedback row (thumbs) ────────────────────────────────────────────────────
+  feedbackRow: {
+    flexDirection:"row", alignItems:"center", gap:6, marginTop:2,
+  },
+  thumbBtn:    {
+    width:26, height:26, borderRadius:13,
+    backgroundColor:C.bg2, borderWidth:0.5, borderColor:C.border2,
+    alignItems:"center", justifyContent:"center",
+  },
+  thumbBtnUp:  {backgroundColor:C.greenS, borderColor:C.greenB},
+  thumbBtnDown:{backgroundColor:C.redS,   borderColor:C.redB},
+  fbLabel:     {fontSize:10, color:C.ink3, fontWeight:"600", marginLeft:2},
+
+  // ── Pivot chips ───────────────────────────────────────────────────────────
+  pivotWrap:   {marginTop:4, gap:6, width:"100%"},
+  pivotLabel:  {fontSize:9, fontWeight:"700", color:C.ink3, letterSpacing:1},
+  pivotRow:    {flexDirection:"row", flexWrap:"wrap", gap:6},
+  pivotChip:   {
+    flexDirection:"row", alignItems:"center", gap:5,
+    paddingHorizontal:11, paddingVertical:7,
+    backgroundColor:C.bgCard, borderRadius:R.full,
+    borderWidth:0.5, borderColor:C.border2,
+    shadowColor:"#6D28D9", shadowOffset:{width:0,height:1}, shadowOpacity:0.05, shadowRadius:2, elevation:1,
+  },
+  pivotChipActive:{borderColor:C.acc, backgroundColor:C.soft},
+  pivotEmoji:  {fontSize:12},
+  pivotText:   {fontSize:11, color:C.ink2, fontWeight:"600"},
 
   // Input
   inputBar:  {flexDirection:"row",alignItems:"flex-end",gap:9,paddingHorizontal:12,paddingVertical:10,

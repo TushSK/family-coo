@@ -39,7 +39,7 @@ from src.prompts import (
     build_weekend_regen_prompt,
 )
 
-_FINAL_REPLY_LINE = "Reply exactly: schedule A / schedule B / schedule C"
+_FINAL_REPLY_LINE = ""
 # -----------------------------
 # Time helpers (no pytz)
 # -----------------------------
@@ -74,7 +74,7 @@ def _next_saturday_date(now: datetime.datetime) -> str:
 
 def _format_abc_text_for_ui(text: str) -> str:
     """
-    Simplified UI formatter. 
+    Simplified UI formatter.
     Relies on the prompt template being correct instead of regex guessing.
     """
     if not text:
@@ -87,11 +87,11 @@ def _format_abc_text_for_ui(text: str) -> str:
     t = re.sub(r"\s*\(B\)\s*", "\n\n(B) ", t)
     t = re.sub(r"\s*\(C\)\s*", "\n\n(C) ", t)
 
-    # Ensure Reply line starts as its own paragraph
-    t = re.sub(r"\s*Reply exactly:\s*", "\n\nReply exactly: ", t, flags=re.IGNORECASE)
+    # Strip "Reply exactly" line — options are tappable cards, not typed replies
+    t = re.sub(r"\n*Reply exactly:\s*schedule\s*[A-C][^\n]*", "", t, flags=re.IGNORECASE)
 
-    # If Optional was appended inline, put it on next line
-    t = re.sub(r"\s*\(Optional:", "\n(Optional:", t, flags=re.IGNORECASE)
+    # Remove "(Optional: ...)" lines
+    t = re.sub(r"\n*\(Optional:[^\n]*\)", "", t, flags=re.IGNORECASE)
 
     # Clean excess blank lines
     t = re.sub(r"\n{3,}", "\n\n", t)
@@ -167,11 +167,13 @@ def _finalize_for_ui(parsed: dict) -> dict:
     if t in ("question", "conflict"):
         parsed["text"] = _format_abc_text_for_ui(parsed.get("text", ""))
 
-    # Ensure reply line exists for A/B/C blocks
+    # Strip "Reply exactly: schedule A / B / C" from displayed text —
+    # options are now tappable cards so this instruction is UI noise.
     txt = parsed.get("text") or ""
-    if "(A)" in txt and "(B)" in txt and "(C)" in txt:
-        if _FINAL_REPLY_LINE not in txt:
-            parsed["text"] = (txt.rstrip() + "\n\n" + _FINAL_REPLY_LINE).strip()
+    txt = re.sub(r"\n*Reply exactly:\s*schedule\s*[A-C][^\n]*", "", txt, flags=re.IGNORECASE).strip()
+    txt = re.sub(r"\n*\(Optional:.*?\)", "", txt, flags=re.IGNORECASE | re.DOTALL).strip()
+    if txt:
+        parsed["text"] = txt
 
     return parsed
 
@@ -674,8 +676,6 @@ def _parse_tomorrow_time(user_text: str, now: datetime.datetime) -> Optional[dat
 def _ensure_event_schema(parsed: Dict[str, Any], user_request: str, now: datetime.datetime) -> Dict[str, Any]:
     """
     Enforce the exact output contract keys and coerce events to schema.
-    All start_time / end_time values are normalised to America/New_York-aware
-    ISO strings (with UTC offset) so mission_log comparisons are unambiguous.
     """
     t = (parsed.get("type") or "chat").lower()
     if t not in {"plan", "conflict", "question", "confirmation", "chat", "error"}:
@@ -692,26 +692,6 @@ def _ensure_event_schema(parsed: Dict[str, Any], user_request: str, now: datetim
     events_in = parsed.get("events")
     if not isinstance(events_in, list):
         events_in = []
-
-    # ── Build ET-aware tzinfo from now (already ET-aware via _get_tz_now) ──────
-    et_tzinfo = now.tzinfo  # ZoneInfo("America/New_York") or None
-
-    def _attach_et(iso_str: str) -> str:
-        """Attach ET timezone to a naive ISO string; leave tz-aware strings alone."""
-        if not iso_str:
-            return iso_str
-        try:
-            import re as _re
-            # Already has offset (+HH:MM, -HH:MM, Z) → keep as-is
-            if _re.search(r'[Z+\-]\d{2}:?\d{2}$', iso_str) or iso_str.endswith('Z'):
-                return iso_str
-            # Naive string → attach ET tzinfo
-            dt = datetime.datetime.fromisoformat(iso_str)
-            if dt.tzinfo is None and et_tzinfo is not None:
-                dt = dt.replace(tzinfo=et_tzinfo)
-            return dt.isoformat(timespec='seconds')
-        except Exception:
-            return iso_str
 
     events_out: List[Dict[str, str]] = []
     for ev in events_in:
@@ -731,12 +711,9 @@ def _ensure_event_schema(parsed: Dict[str, Any], user_request: str, now: datetim
                 start_time = dt.strftime("%Y-%m-%dT%H:%M:%S")
                 end_time = _default_end_time(dt, 60).strftime("%Y-%m-%dT%H:%M:%S")
             else:
+                # Keep empty strings (schema-valid). Flow/UI should gate execution anyway.
                 start_time = start_time or ""
                 end_time = end_time or ""
-
-        # ── Always attach ET timezone so the stored string is unambiguous ──────
-        start_time = _attach_et(start_time)
-        end_time   = _attach_et(end_time)
 
         events_out.append(
             {
@@ -852,8 +829,8 @@ def _regen_dynamic_weekend_options(
                 "(C) Local library + treat after\n"
                 "    Duration: 2 hours\n"
                 "    Time window: Sun 12:00 PM–2:00 PM\n\n"
-                "Reply exactly: schedule A / schedule B / schedule C"
-            )
+                ""
+        )
             return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
         raise
 
@@ -948,8 +925,7 @@ def _regen_time_question(
         "You must return STRICT JSON ONLY with keys: type,text,pre_prep,events.\n"
         "The user wants scheduling but did NOT provide a specific start time.\n"
         "Return type='question'. Provide exactly 3 options labeled (A),(B),(C) with reasonable time windows.\n"
-        "End the question with: Reply exactly: schedule A / schedule B / schedule C\n"
-        "events must be an empty list.\n"
+                "events must be an empty list.\n"
     )
     system_prompt = build_system_prompt(ctx)
     combined_system = system_prompt + "\n\n" + instruction
@@ -968,7 +944,7 @@ def _regen_time_question(
             "(A) Morning — 10:00 AM - 12:00 PM\n"
             "(B) Afternoon — 2:00 PM - 4:00 PM\n"
             "(C) Evening — 6:00 PM - 8:00 PM\n\n"
-            "Reply exactly: schedule A / schedule B / schedule C"
+            ""
         )
         return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
     
@@ -1053,7 +1029,7 @@ def _regen_force_plan_from_selection(
                 "(A) Morning — 10:00 AM - 12:00 PM\n"
                 "(B) Afternoon — 2:00 PM - 4:00 PM\n"
                 "(C) Evening — 6:00 PM - 8:00 PM\n\n"
-                "Reply exactly: schedule A / schedule B / schedule C"
+                ""
             )
             return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
 
@@ -1073,7 +1049,7 @@ def _regen_force_plan_from_selection(
                 "(A) Morning — 10:00 AM - 12:00 PM\n"
                 "(B) Afternoon — 2:00 PM - 4:00 PM\n"
                 "(C) Evening — 6:00 PM - 8:00 PM\n\n"
-                "Reply exactly: schedule A / schedule B / schedule C"
+                ""
             )
             return {"type": "question", "text": fallback_text, "pre_prep": "", "events": []}
         raise
@@ -1364,11 +1340,12 @@ def get_coo_response(
         "turn_count": _turn_count,
     }
 
-    # Optional: memory summary (safe, no file I/O assumptions)
+    # Memory summary — expanded to n=20 so all profile fields reach the AI.
+    # With the flattened dict format from _get_user_memory(), each preference
+    # (cuisine, interests, family, fitness, etc.) now occupies one slot.
     try:
         from src.utils import get_memory_summary_from_memory
-
-        ctx["memory_summary"] = get_memory_summary_from_memory(memory, n=12)
+        ctx["memory_summary"] = get_memory_summary_from_memory(memory, n=20)
     except Exception:
         ctx["memory_summary"] = []
 
@@ -1536,8 +1513,9 @@ def get_coo_response(
     if _is_schedule_intent(user_request) and parsed.get("type") == "question":
         qtxt = (parsed.get("text") or "")
         has_abc = ("(A)" in qtxt and "(B)" in qtxt and "(C)" in qtxt)
-        has_reply = ('Reply exactly: schedule A / schedule B / schedule C' in qtxt)
-        if not (has_abc and has_reply):
+        # has_reply check removed — "Reply exactly" line is stripped from display
+        # and no longer injected. has_abc is sufficient to confirm options were given.
+        if not has_abc:
             regen = _regen_time_question(router, model, ctx, user_request=user_request)
             return _dump_final(regen)
 

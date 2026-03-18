@@ -319,10 +319,17 @@ class AddEventRequest(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    user_id:  str
-    mission:  str
-    feedback: str = ""
-    rating:   str = "thumbs_up"
+    user_id:       str
+    mission:       str           # mission title OR AI response summary
+    feedback:      str = ""
+    rating:        str = "thumbs_up"
+    # Extended fields for chat bubble feedback
+    reason:        str = ""      # pivot chip label ("Too late", "Indoor instead", etc.)
+    note:          str = ""      # free text if any
+    feedback_type: str = ""      # "chat_thumbs_up" | "chat_thumbs_down" | "skipped" | "completed"
+    # Store the full good response so the AI learns from it
+    good_response_text:    str = ""   # AI message text when thumbs_up
+    good_response_options: str = ""   # JSON list of option titles when thumbs_up
 
 
 class SnoozeRequest(BaseModel):
@@ -367,15 +374,85 @@ def _get_user_uuid(db: SupabaseClient, email: str) -> Optional[str]:
 
 
 def _get_user_memory(db: SupabaseClient, user_id: str) -> list:
+    """
+    Returns memory as a list of {kind, key, value, confidence, ts_utc} items.
+
+    The Supabase user_memory.memory column can be either:
+      A) A dict blob  {"cuisine": ["Indian"], "interests": [...], ...}  (onboarding format)
+      B) A list of    {"kind":..., "key":..., "value":..., ...}         (brain-written format)
+
+    get_memory_summary_from_memory() in utils.py expects format B.
+    We normalise A → B here so the AI always sees a rich, de-duplicated
+    preference list regardless of how the data was originally written.
+    """
     try:
         res = db.table("user_memory").select("memory").eq("email", user_id).execute()
-        if res.data:
-            mem = res.data[0].get("memory") or {}
-            if isinstance(mem, dict):
-                return [mem]
-            if isinstance(mem, list):
-                return mem
-        return []
+        if not res.data:
+            return []
+        mem = res.data[0].get("memory") or {}
+
+        # Already in list format (brain-written, has 'key' field)
+        if isinstance(mem, list):
+            return mem
+
+        if not isinstance(mem, dict):
+            return []
+
+        # ── Flatten dict blob → [{kind, key, value, confidence}] ──────────────
+        # Maps every meaningful field from the onboarding/profile dict into the
+        # key/value format that get_memory_summary_from_memory() iterates.
+        out: list = []
+        ts = "2026-01-01T00:00:00Z"  # stable fallback timestamp
+
+        def _add(kind: str, key: str, value, conf: float = 0.8):
+            v = value
+            if isinstance(v, list):
+                v = ", ".join(str(x) for x in v) if v else ""
+            if v:
+                out.append({"kind": kind, "key": key, "value": str(v),
+                            "confidence": conf, "ts_utc": ts})
+
+        # Core preferences
+        _add("preference", "cuisine",          mem.get("cuisine")          or mem.get("food_preferences"))
+        _add("preference", "interests",        mem.get("interests")        or mem.get("lifestyle_interests"))
+        _add("preference", "hobbies",          mem.get("hobbies")          or mem.get("hobby_list"))
+        _add("preference", "food_preference",  mem.get("food_preference"))
+        _add("preference", "diet",             mem.get("diet"))
+        _add("preference", "tone",             mem.get("tone")             or mem.get("tone_response_style"))
+        _add("preference", "scheduling_style", mem.get("scheduling_style"))
+        _add("preference", "outing_preferences", mem.get("outing_preferences"))
+        _add("preference", "weekend_style",    mem.get("weekend_style")    or mem.get("weekend_outing_style"))
+
+        # Family / logistics
+        fam = mem.get("family_members") or mem.get("family") or []
+        if isinstance(fam, list) and fam:
+            _add("profile", "family_members", ", ".join(str(f) for f in fam))
+        elif isinstance(fam, str) and fam:
+            _add("profile", "family_members", fam)
+        _add("profile",  "location",      mem.get("location") or mem.get("home_city"))
+        _add("profile",  "fitness",       mem.get("fitness")  or mem.get("gym"))
+        _add("profile",  "vehicles",      mem.get("vehicles"))
+        _add("profile",  "routines",      mem.get("routines"))
+
+        # Activity preferences
+        _add("preference", "outdoor_activities",  mem.get("outdoor_activities"))
+        _add("preference", "activity_preferences",mem.get("activity_preferences"))
+        _add("pattern",    "weekly_activity",     mem.get("weekly_activity"))
+        _add("preference", "proactive_frequency", mem.get("proactive_frequency"))
+        _add("preference", "avoid",               mem.get("avoid"))
+
+        # Any extra keys not explicitly mapped above
+        known = {"cuisine","food_preferences","interests","lifestyle_interests","hobbies",
+                 "hobby_list","food_preference","diet","tone","tone_response_style",
+                 "scheduling_style","outing_preferences","weekend_style","weekend_outing_style",
+                 "family_members","family","location","home_city","fitness","gym","vehicles",
+                 "routines","outdoor_activities","activity_preferences","weekly_activity",
+                 "proactive_frequency","avoid"}
+        for k, v in mem.items():
+            if k not in known and v:
+                _add("preference", k, v, conf=0.7)
+
+        return out
     except Exception:
         return []
 
@@ -396,18 +473,35 @@ def _get_recent_missions(db: SupabaseClient, user_id: str) -> str:
 
 
 def _get_feedback_dump(db: SupabaseClient, user_id: str) -> str:
+    """
+    Returns the last 30 feedback entries as JSON.
+    Includes mission title, feedback text, rating, reason, and timestamp.
+    Used by the AI to learn what the user liked/disliked and avoid repeating mistakes.
+    NOTE: orders by 'timestamp' (not created_at — that column doesn't exist).
+    """
     try:
         res = (
             db.table("feedback_log")
-            .select("mission,feedback,rating,timestamp")
+            .select("mission,feedback,rating,reason,note,timestamp,feedback_type")
             .eq("email", user_id)
-            .order("created_at", desc=True)
-            .limit(20)
+            .order("timestamp", desc=True)
+            .limit(30)
             .execute()
         )
         return json.dumps(res.data or [])
     except Exception:
-        return "[]"
+        # Fallback: try without ordering if timestamp column also fails
+        try:
+            res = (
+                db.table("feedback_log")
+                .select("mission,feedback,rating,reason,note,timestamp,feedback_type")
+                .eq("email", user_id)
+                .limit(30)
+                .execute()
+            )
+            return json.dumps(res.data or [])
+        except Exception:
+            return "[]"
 
 
 def _save_chat_turn(db: SupabaseClient, user_id: str, role: str, content: str, meta: dict = {}):
@@ -486,10 +580,41 @@ def chat(req: ChatRequest, db: SupabaseClient = Depends(get_db)):
         res = db.table("user_memory").select("ideas").eq("email", req.user_id).execute()
         if res.data:
             raw = res.data[0].get("ideas") or []
-            ideas_summary = raw if isinstance(raw, list) else []
-            ideas_dump    = json.dumps(ideas_summary)
+            # ideas can be stored as [{id,text,converted,...}] — filter to pending only
+            if isinstance(raw, list):
+                ideas_summary = [
+                    {"text": i.get("text",""), "id": i.get("id","")}
+                    for i in raw
+                    if isinstance(i, dict) and i.get("text") and not i.get("converted")
+                ]
+            ideas_dump = json.dumps(ideas_summary)
     except Exception:
         pass
+
+    # ── Merge frontend chat_history with DB history for richer context ─────────
+    # Frontend state is cleared when the user taps "Clear". Loading recent DB
+    # turns gives the AI continuity across sessions without bloating the prompt.
+    merged_history = list(req.chat_history or [])
+    if len(merged_history) < 6:
+        try:
+            uid = _get_user_uuid(db, req.user_id)
+            if uid:
+                db_hist = (
+                    db.table("chat_history")
+                    .select("role,content")
+                    .eq("user_id", uid)
+                    .order("created_at", desc=True)
+                    .limit(10)
+                    .execute()
+                )
+                # Reverse so oldest-first, then prepend to frontend history
+                db_turns = list(reversed(db_hist.data or []))
+                # Deduplicate: drop DB turns whose content already appears in frontend
+                frontend_contents = {m.get("content","") for m in merged_history}
+                db_turns = [t for t in db_turns if t.get("content","") not in frontend_contents]
+                merged_history = db_turns + merged_history
+        except Exception:
+            pass
 
     calendar_data = []
     try:
@@ -508,7 +633,7 @@ def chat(req: ChatRequest, db: SupabaseClient = Depends(get_db)):
         user_request     = req.message,
         memory           = memory,
         calendar_data    = calendar_data,
-        chat_history     = req.chat_history,
+        chat_history     = merged_history,   # ← merged DB + frontend history
         idea_options     = req.idea_options,
         ideas_summary    = ideas_summary,
         ideas_dump       = ideas_dump,
@@ -665,17 +790,36 @@ def save_ideas(req: IdeasSyncRequest, db: SupabaseClient = Depends(get_db)):
 
 @app.post("/api/feedback")
 def save_feedback(req: FeedbackRequest, db: SupabaseClient = Depends(get_db)):
+    """
+    Stores feedback from both mission snooze/complete and chat bubble thumbs.
+
+    For chat thumbs_up: good_response_text + good_response_options are stored
+    so the AI can reference what worked well in future sessions.
+
+    For chat thumbs_down: reason (pivot chip label) is stored so the AI avoids
+    repeating the same type of suggestion.
+    """
     uid = _get_user_uuid(db, req.user_id)
     try:
-        db.table("feedback_log").insert({
-            "user_id":    uid,
-            "email":      req.user_id,
-            "mission":    req.mission,
-            "feedback":   req.feedback,
-            "rating":     req.rating,
-            "timestamp":  "now",
-            "entry_type": "feedback",
-        }).execute()
+        row: dict = {
+            "user_id":      uid,
+            "email":        req.user_id,
+            "mission":      req.mission,
+            "feedback":     req.feedback,
+            "rating":       req.rating,
+            "reason":       req.reason,
+            "note":         req.note,
+            "timestamp":    "now",
+            "entry_type":   "feedback",
+            "feedback_type": req.feedback_type or ("chat_thumbs_up" if req.rating == "thumbs_up" else "feedback"),
+        }
+        # Persist good response content so prompts.py feedback_block can surface it
+        if req.rating == "thumbs_up" and req.good_response_text:
+            row["feedback"] = f"[GOOD RESPONSE] {req.good_response_text[:300]}"
+        if req.good_response_options:
+            row["note"] = req.good_response_options[:400]
+
+        db.table("feedback_log").insert(row).execute()
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, str(e))

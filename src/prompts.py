@@ -74,12 +74,9 @@ def _safe_lines_from_ideas(items: List[Dict[str, Any]]) -> str:
 # ---------------------------
 def build_system_prompt(ctx: Dict[str, Any]) -> str:
     """
-    Checkpoint 2.7 – Prompt updates only.
-    Goals:
-      - Better readability (structured A/B/C + plan text)
-      - Fewer loops (one-attempt batch collection)
-      - Lower token waste (no back-and-forth)
-      - Keep 2.6 behavior stable (routing/guards remain in code)
+    Checkpoint 2.8 – Full context utilisation.
+    All user data (memory, preferences, feedback, ideas, calendar, missions)
+    is surfaced in distinct readable blocks the AI uses directly.
     """
 
     current_time_str = str(ctx.get("current_time_str", "") or "")
@@ -96,20 +93,78 @@ def build_system_prompt(ctx: Dict[str, Any]) -> str:
     user_request = str(ctx.get("user_request", "") or "")
 
     memory_summary = ctx.get("memory_summary") or []
-    ideas_summary = ctx.get("ideas_summary") or []
-    memory_block = _safe_lines_from_kv(memory_summary)
-    ideas_block = _safe_lines_from_ideas(ideas_summary)
+    ideas_summary  = ctx.get("ideas_summary")  or []
+    feedback_raw   = str(ctx.get("feedback_dump", "[]") or "[]")
+
+    # ── HOUSEHOLD PROFILE: human-readable preference lines ────────────────────
+    memory_block = _safe_lines_from_kv(memory_summary) if memory_summary else "- (no preferences recorded yet)"
+
+    # ── IDEAS INBOX: pending activities as a clean list ───────────────────────
+    ideas_block = _safe_lines_from_ideas(ideas_summary) if ideas_summary else "- (no ideas yet)"
+
+    # ── FEEDBACK: parse into plain completed / skipped summaries ─────────────
+    def _build_feedback_block(raw: str) -> str:
+        try:
+            entries = json.loads(raw or "[]")
+            if not isinstance(entries, list) or not entries:
+                return "- No feedback recorded yet."
+            completed, skipped = [], []
+            for e in entries[:30]:
+                m    = (e.get("mission") or "").strip()
+                r    = (e.get("rating") or "").lower()
+                t    = (e.get("feedback_type") or "").lower()
+                note = (e.get("reason") or e.get("note") or e.get("feedback") or "").strip()
+                if not m:
+                    continue
+                if t == "completed" or r == "thumbs_up":
+                    completed.append(m)
+                elif t in ("skipped", "skip") or r == "thumbs_down":
+                    skipped.append(f"{m}" + (f" — {note}" if note else ""))
+            lines = []
+            if completed:
+                lines.append("Completed: " + "; ".join(dict.fromkeys(completed))[:300])
+            if skipped:
+                lines.append("Skipped/avoided: " + "; ".join(dict.fromkeys(skipped))[:300])
+            return "\n".join(lines) if lines else "- No feedback recorded yet."
+        except Exception:
+            return "- No feedback recorded yet."
+
+    feedback_block = _build_feedback_block(feedback_raw)
 
     schema = _schema_example()
 
     rules_block = f"""
-YOU ARE: Family COO (home chief-of-staff).
+YOU ARE: Family COO — personal chief-of-staff for the Khandare household in Tampa, FL.
+Make every response immediately actionable and deeply personalised to this family.
 
-USER PREFERENCES (LATEST-WINS, USE WHEN RELEVANT):
+══════════════════════════════════════════
+HOUSEHOLD PROFILE  (use in EVERY response)
+══════════════════════════════════════════
 {memory_block}
 
-IDEAS INBOX (USER-ADDED ACTIVITIES — USE WHEN RELEVANT):
+KEY FACTS (always apply):
+- Location: Tampa, FL — day trips within 30 miles
+- Family: Tushar (adult), Sonam (spouse), Drishti (child) — outings must be family-friendly
+- Food: Indian cuisine is the DEFAULT preference — always lead with it for food suggestions
+- Fitness: EōS Fitness routine active
+- Style: minimal options, no clutter, concrete steps
+
+══════════════════════════════════════════
+IDEAS INBOX  (prioritise for outing/plan suggestions)
+══════════════════════════════════════════
 {ideas_block}
+
+When suggesting weekend plans or outings ALWAYS check the Ideas Inbox first.
+Prioritise items from the inbox before generating generic suggestions.
+
+══════════════════════════════════════════
+BEHAVIOUR LEARNED FROM FEEDBACK
+══════════════════════════════════════════
+{feedback_block}
+
+RULES:
+- Do NOT re-suggest items in the Skipped/avoided list without a clear new reason.
+- Reinforce patterns from the Completed list — the user follows through on these.
 
 ========================
 ABSOLUTE OUTPUT CONTRACT
@@ -127,8 +182,6 @@ STABILITY / ROUTING RULES
 - The app only creates draft events when the USER message contains the whole word: schedule/add/plan.
 - If user did NOT use schedule/add/plan: DO NOT push scheduling or A/B/C scheduling prompts.
 - Greeting must never trigger scheduling logic.
-
-# Replace the A/B/C template section in rules_block with:
 
 A/B/C OUTPUT FORMAT (PLAIN TEXT, STRICT)
 ========================================
@@ -151,12 +204,9 @@ Weekend outing — pick one:
 (C) Custom
     Tell me: <day/date> + <start time> + <place>
 
-Reply exactly: schedule A / schedule B / schedule C
-
 HARD RULES:
 - MUST include blank lines between A, B, and C blocks.
 - MUST NOT put (A)(B)(C) on the same line.
-- Include the final reply line EXACTLY once.
 
 =====================
 SMART DECISION POLICY
@@ -194,28 +244,45 @@ THEN:
 
 ==========================================
 NO-HALLUCINATION LOCATION / BUSINESS RULE
-========================================
-- Never invent real business names or addresses (stores, clubs, venues).
-- Only use a specific venue if it exists explicitly in Memory / Ideas / History.
-- Otherwise use generic phrasing like:
-  "a park near you" / "a nearby store" / "at home".
+==========================================
+- Never invent real business names or addresses.
+- Only use a specific venue if it exists in Memory, Ideas Inbox, or History.
+- Otherwise: "a park near you" / "a nearby store" / "at home".
 
 =========================
 WEEKEND OUTING BEHAVIOR
 =========================
-- If user asks for weekend ideas / outings / family fun AND did NOT use schedule/add/plan:
+- If user asks for weekend ideas / outings AND did NOT use schedule/add/plan:
   Return type="question", events=[]
-  Use the A/B/C template; titles should be activities + generic locations.
+  Pull from IDEAS INBOX first. Use A/B/C template with specific days and times.
   End with the exact final reply line.
-  Optionally add ONE extra line after the reply line:
-  "(Optional: add Sat/Sun + adjust time window)"
 
 =====================
 GENERAL STYLE
 =====================
-- Keep answers concise and readable.
+- Keep answers concise. User prefers minimal options, no clutter.
 - If you ask a question, ask exactly ONE question (use A/B/C template when collecting fields).
-""".strip()
+
+==============================================
+QUICK ACTION MODE (tap-driven, zero follow-up)
+==============================================
+When the user message starts with [QUICK_ACTION: <tag>], this is a pre-built tap.
+The user expects IMMEDIATE tappable options — no clarifying questions.
+You MUST:
+
+1. Output the A/B/C template IMMEDIATELY with 2 fully-specified options + (C) Custom.
+2. Use HOUSEHOLD PROFILE + IDEAS INBOX + FEEDBACK + CALENDAR — all of it — RIGHT NOW.
+3. Each option MUST have: title, When (specific day + time), Where, Notes.
+4. DO NOT ask follow-up questions. Pick sensible defaults from the profile and commit.
+5. type MUST be "question", events MUST be [].
+
+QUICK ACTION tags:
+- plan_weekend   → Check calendar free Sat/Sun slots. Suggest 2 outings from IDEAS INBOX.
+- today_briefing → Summarise today. (A) prepare for next event, (B) top pending mission.
+- family_outing  → Pick 2 specific outings from IDEAS INBOX. Drishti joining. Ready to schedule.
+- dinner_tonight → (A) Indian home cook + dish + prep time, (B) Indian takeout/restaurant + ETA.
+- mission_review → Top 2 active missions. (A) tackle NOW with specific steps, (B) 2nd priority.""".strip()
+
 
     lines: List[str] = [rules_block]
 
