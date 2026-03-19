@@ -36,7 +36,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+import base64, hashlib, hmac, smtplib, urllib.parse, urllib.request as _urlreq
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 
 # ── Timezone helper ────────────────────────────────────────────────────────────
@@ -145,6 +149,11 @@ ANTHROPIC_KEY        = _secret("ANTHROPIC_API_KEY",    "ANTHROPIC_API_KEY", sect
 GROQ_KEY             = _secret("GROQ_API_KEY",         "GROQ_API_KEY",      section=_KEYS) or _GENERAL.get("groq_api_key", "")
 GCAL_CLIENT_ID       = _secret("GOOGLE_CLIENT_ID",     "client_id",         section=_GOAUTH)
 GCAL_CLIENT_SECRET   = _secret("GOOGLE_CLIENT_SECRET", "client_secret",     section=_GOAUTH)
+
+# Separate credentials for waitlist OAuth (Web application type client)
+# Falls back to GCAL credentials if not set — allows gradual migration
+WAITLIST_CLIENT_ID     = os.environ.get("WAITLIST_GOOGLE_CLIENT_ID")     or GCAL_CLIENT_ID
+WAITLIST_CLIENT_SECRET = os.environ.get("WAITLIST_GOOGLE_CLIENT_SECRET") or GCAL_CLIENT_SECRET
 
 # -- Supabase client (singleton) ----------------------------------------------
 from supabase import create_client, Client as SupabaseClient
@@ -336,6 +345,18 @@ class SnoozeRequest(BaseModel):
     snoozed_until: str
 
 
+# ── Admin models ──────────────────────────────────────────────────────────────
+
+class AdminBumpRequest(BaseModel):
+    email:     str
+    admin_pin: str
+
+class AdminPauseRequest(BaseModel):
+    email:     str
+    paused:    bool
+    admin_pin: str
+
+
 # -- app factory --------------------------------------------------------------
 
 @asynccontextmanager
@@ -472,6 +493,65 @@ def _get_recent_missions(db: SupabaseClient, user_id: str) -> str:
         return "[]"
 
 
+
+def _track_usage(
+    db: SupabaseClient,
+    email: str,
+    intent: str,
+    tokens_used: int = 0,
+    error_type: Optional[str] = None,
+    error_msg: Optional[str] = None,
+) -> None:
+    """
+    Atomically increments tester_usage counters and optionally logs a silent error.
+    Fire-and-forget — never blocks or raises so the user response is never delayed.
+
+    Tokens are estimated from word count (×1.3 multiplier) because the Anthropic SDK
+    response object isn't threaded through to this layer. Accurate enough for the
+    dashboard — real token counts can be swapped in later via usage metadata.
+    """
+    try:
+        existing = (
+            db.table("tester_usage")
+            .select("id,request_count,token_count")
+            .eq("email", email)
+            .execute()
+        )
+        if existing.data:
+            row = existing.data[0]
+            db.table("tester_usage").update({
+                "request_count": (row.get("request_count") or 0) + 1,
+                "token_count":   (row.get("token_count")   or 0) + tokens_used,
+                "last_intent":   intent[:80] if intent else "",
+                "last_pulse":    datetime.utcnow().isoformat() + "Z",
+            }).eq("email", email).execute()
+        else:
+            # Auto-register unknown callers with default limit
+            db.table("tester_usage").insert({
+                "email":         email,
+                "display_name":  email.split("@")[0],
+                "request_count": 1,
+                "token_count":   tokens_used,
+                "request_limit": 50,
+                "last_intent":   intent[:80] if intent else "",
+                "last_pulse":    datetime.utcnow().isoformat() + "Z",
+            }).execute()
+    except Exception:
+        pass  # never block the user response
+
+    if error_type:
+        try:
+            db.table("tester_errors").insert({
+                "email":       email,
+                "error_type":  error_type,
+                "error_msg":   str(error_msg or "")[:500],
+                "intent":      intent[:80] if intent else "",
+                "tokens_used": tokens_used,
+            }).execute()
+        except Exception:
+            pass
+
+
 def _get_feedback_dump(db: SupabaseClient, user_id: str) -> str:
     """
     Returns the last 30 feedback entries as JSON.
@@ -570,6 +650,28 @@ def chat(req: ChatRequest, db: SupabaseClient = Depends(get_db)):
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "ANTHROPIC_API_KEY not configured")
 
+    # ── Admin pause guard — checked on every call, fails fast ─────────────────
+    try:
+        pause_row = (
+            db.table("tester_usage")
+            .select("is_paused,request_count,request_limit")
+            .eq("email", req.user_id)
+            .execute()
+        )
+        if pause_row.data:
+            row = pause_row.data[0]
+            if row.get("is_paused"):
+                raise HTTPException(403, "Access temporarily paused by admin.")
+            if (row.get("request_count") or 0) >= (row.get("request_limit") or 50):
+                _track_usage(db, req.user_id, intent=req.message[:80],
+                             error_type="Limit Reached",
+                             error_msg=f"Used {row.get('request_count')} of {row.get('request_limit')}")
+                raise HTTPException(429, "Request limit reached. Contact admin to extend.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # tester_usage table might not exist yet — don't block
+
     memory        = _get_user_memory(db, req.user_id)
     missions_dump = _get_recent_missions(db, req.user_id)
     feedback_dump = _get_feedback_dump(db, req.user_id)
@@ -644,10 +746,18 @@ def chat(req: ChatRequest, db: SupabaseClient = Depends(get_db)):
 
     try:
         parsed = json.loads(raw_json)
-    except Exception:
+    except Exception as _parse_err:
         parsed = {"type": "error", "text": raw_json, "pre_prep": "", "events": []}
+        _track_usage(db, req.user_id, intent=req.message[:80],
+                     error_type="Parse Error", error_msg=str(_parse_err))
 
     _save_chat_turn(db, req.user_id, "assistant", parsed.get("text", ""), meta=parsed)
+
+    # ── Track usage silently — estimate tokens from message + response length ──
+    _tokens = int(
+        (len(req.message.split()) + len(parsed.get("text","").split())) * 1.3
+    )
+    _track_usage(db, req.user_id, intent=req.message[:80], tokens_used=_tokens)
 
     return ChatResponse(
         type     = parsed.get("type", "chat"),
@@ -1000,3 +1110,459 @@ def get_insights(user_id: str, db: SupabaseClient = Depends(get_db)):
         },
         "insights": insights[:5],
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ADMIN ENDPOINTS  —  protected by ADMIN_PIN env var
+# ═════════════════════════════════════════════════════════════════════════════
+
+ADMIN_PIN    = os.environ.get("ADMIN_PIN", "4240")
+ADMIN_EMAILS: list = ["tushar.khandare@gmail.com"]
+
+# ── Waitlist / email config ────────────────────────────────────────────────────
+VERCEL_URL    = os.environ.get("VERCEL_URL",    "https://family-coo-landing.vercel.app")
+RENDER_URL    = os.environ.get("RENDER_URL",    "https://family-coo.onrender.com")
+EMAIL_FROM    = os.environ.get("EMAIL_FROM",    "")   # your gmail address
+EMAIL_PASS    = os.environ.get("EMAIL_PASS",    "")   # Gmail app password
+ADMIN_EMAIL   = os.environ.get("ADMIN_EMAIL",   "tushar.khandare@gmail.com")
+GOOGLE_OAUTH_REDIRECT = f"{os.environ.get('RENDER_URL', 'https://family-coo.onrender.com')}/api/waitlist/callback"
+
+def _verify_admin(pin: str) -> None:
+    """Raise 403 if PIN is wrong. One-liner guard used by all admin routes."""
+    if pin != ADMIN_PIN:
+        raise HTTPException(403, "Invalid admin PIN")
+
+
+@app.get("/api/admin/stats")
+def admin_stats(admin_pin: str, db: SupabaseClient = Depends(get_db)):
+    """
+    Returns the full tester roster with usage + recent errors merged per tester.
+    Called by the admin dashboard on load and every 30-second poll.
+
+    Response shape:
+      {
+        testers: [{email, display_name, request_count, token_count, request_limit,
+                   is_paused, last_intent, last_pulse, joined_at,
+                   recent_errors: [{error_type, error_msg, intent, created_at}]}],
+        totals:  {total_requests, total_tokens, active_today, alert_count}
+      }
+    """
+    _verify_admin(admin_pin)
+    try:
+        testers_res = db.table("tester_usage").select("*").order("last_pulse", desc=True).execute()
+        testers = testers_res.data or []
+    except Exception as e:
+        raise HTTPException(500, f"Could not fetch tester_usage: {e}")
+
+    # Fetch errors from the last 24 hours
+    try:
+        from datetime import timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        errors_res = (
+            db.table("tester_errors")
+            .select("email,error_type,error_msg,intent,created_at")
+            .gte("created_at", cutoff)
+            .order("created_at", desc=True)
+            .limit(200)
+            .execute()
+        )
+        errors_raw = errors_res.data or []
+    except Exception:
+        errors_raw = []
+
+    # Group errors by email
+    errors_by_email: dict = {}
+    for e in errors_raw:
+        em = e.get("email", "")
+        errors_by_email.setdefault(em, []).append(e)
+
+    # Merge errors onto tester rows + compute alert flag
+    from datetime import timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+    active_today = 0
+    alert_count  = 0
+
+    for t in testers:
+        em = t.get("email", "")
+        t["recent_errors"] = errors_by_email.get(em, [])[:5]
+
+        # Active today = last_pulse within 24h
+        pulse_str = t.get("last_pulse") or ""
+        try:
+            pulse_dt = datetime.fromisoformat(pulse_str.replace("Z", "+00:00"))
+            if (now_utc - pulse_dt).total_seconds() < 86400:
+                active_today += 1
+        except Exception:
+            pass
+
+        # Alert = has errors OR at/above 84% of limit
+        limit = t.get("request_limit") or 50
+        used  = t.get("request_count") or 0
+        has_alert = bool(t["recent_errors"]) or (used / max(limit, 1) >= 0.84)
+        t["has_alert"] = has_alert
+        if has_alert:
+            alert_count += 1
+
+    # Compute global totals
+    total_requests = sum(t.get("request_count", 0) for t in testers)
+    total_tokens   = sum(t.get("token_count",   0) for t in testers)
+
+    return {
+        "testers": testers,
+        "totals": {
+            "total_requests": total_requests,
+            "total_tokens":   total_tokens,
+            "active_today":   active_today,
+            "alert_count":    alert_count,
+        },
+    }
+
+
+@app.post("/api/admin/bump")
+def admin_bump(req: AdminBumpRequest, db: SupabaseClient = Depends(get_db)):
+    """
+    Increments a tester's request_limit by 25.
+    Called when admin taps "Bump Limit +25" on the dashboard.
+    """
+    _verify_admin(req.admin_pin)
+    try:
+        existing = db.table("tester_usage").select("request_limit").eq("email", req.email).execute()
+        if not existing.data:
+            raise HTTPException(404, f"Tester {req.email} not found")
+        current_limit = existing.data[0].get("request_limit") or 50
+        new_limit = current_limit + 25
+        db.table("tester_usage").update({
+            "request_limit": new_limit,
+        }).eq("email", req.email).execute()
+        return {"success": True, "email": req.email, "new_limit": new_limit}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/admin/pause")
+def admin_pause(req: AdminPauseRequest, db: SupabaseClient = Depends(get_db)):
+    """
+    Toggles is_paused on a tester row.
+    When paused=True, the /api/chat guard rejects their calls immediately.
+    Takes effect on the next request — no restart needed.
+    """
+    _verify_admin(req.admin_pin)
+    try:
+        existing = db.table("tester_usage").select("id").eq("email", req.email).execute()
+        if not existing.data:
+            raise HTTPException(404, f"Tester {req.email} not found")
+        db.table("tester_usage").update({
+            "is_paused": req.paused,
+        }).eq("email", req.email).execute()
+        action = "paused" if req.paused else "unpaused"
+        return {"success": True, "email": req.email, "status": action}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WAITLIST ENDPOINTS  —  Full OAuth → waitlist → approve → deep link flow
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── Email helper ──────────────────────────────────────────────────────────────
+
+def _send_email(to: str, subject: str, html_body: str) -> bool:
+    """Send HTML email via Gmail SMTP. Returns True on success."""
+    if not EMAIL_FROM or not EMAIL_PASS:
+        print(f"[email] skipped — EMAIL_FROM/EMAIL_PASS not set. Would send to: {to}")
+        return False
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = EMAIL_FROM
+        msg["To"]      = to
+        msg.attach(MIMEText(html_body, "html"))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
+            s.login(EMAIL_FROM, EMAIL_PASS)
+            s.sendmail(EMAIL_FROM, to, msg.as_string())
+        print(f"[email] sent to {to}")
+        return True
+    except Exception as e:
+        print(f"[email] failed: {e}")
+        return False
+
+
+def _google_token_exchange(code: str) -> dict:
+    """
+    Exchange Google auth code for id_token.
+    Decodes the JWT payload (no signature verify — we trust Google's redirect).
+    Returns dict with at least: email, name.
+    """
+    data = urllib.parse.urlencode({
+        "code":          code,
+        "client_id":     WAITLIST_CLIENT_ID,
+        "client_secret": WAITLIST_CLIENT_SECRET,
+        "redirect_uri":  GOOGLE_OAUTH_REDIRECT,
+        "grant_type":    "authorization_code",
+    }).encode()
+    req = _urlreq.Request(
+        "https://oauth2.googleapis.com/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with _urlreq.urlopen(req, timeout=15) as r:
+        tokens = json.loads(r.read())
+
+    id_token = tokens.get("id_token", "")
+    if not id_token:
+        raise ValueError("No id_token in Google response")
+
+    # Decode JWT payload (middle segment) — base64url, no sig verify needed
+    parts = id_token.split(".")
+    payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+    info = json.loads(base64.urlsafe_b64decode(payload_b64))
+    return {
+        "email": info.get("email", ""),
+        "name":  info.get("name", info.get("email", "").split("@")[0]),
+        "sub":   info.get("sub", ""),
+    }
+
+
+# ── 1. OAuth callback — Google redirects here after sign-in ──────────────────
+
+@app.get("/api/waitlist/callback")
+def waitlist_callback(code: str, db: SupabaseClient = Depends(get_db)):
+    """
+    Google redirects here with ?code=…
+    Flow:
+      1. Exchange code for email via Google token endpoint
+      2. Upsert into waitlist table (pending)
+      3. Email admin (you) — new application alert
+      4. Redirect browser → Vercel /waiting.html?email=…&pos=…
+    """
+    # Exchange code for user info
+    try:
+        user = _google_token_exchange(code)
+    except Exception as e:
+        raise HTTPException(400, f"Google auth failed: {e}")
+
+    email = user["email"]
+    name  = user["name"]
+
+    if not email:
+        raise HTTPException(400, "Could not retrieve email from Google")
+
+    # Upsert into waitlist — ignore if already exists
+    try:
+        existing = db.table("waitlist").select("id,position,status").eq("email", email).execute()
+        if existing.data:
+            row      = existing.data[0]
+            position = row.get("position") or 1
+            status   = row.get("status")   or "pending"
+        else:
+            # Insert new applicant
+            res = db.table("waitlist").insert({
+                "email":  email,
+                "name":   name,
+                "status": "pending",
+            }).execute()
+            row      = res.data[0] if res.data else {}
+            position = row.get("position") or 1
+            status   = "pending"
+    except Exception as e:
+        raise HTTPException(500, f"Database error: {e}")
+
+    # Email admin — new application alert
+    admin_approve_url = (
+        f"{RENDER_URL}/api/waitlist/approve"
+        f"?email={urllib.parse.quote(email)}&admin_pin={ADMIN_PIN}"
+    )
+    _send_email(
+        to      = ADMIN_EMAIL,
+        subject = f"🏠 New Family COO Beta Application — {name}",
+        html_body = f"""
+<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+  <h2 style="color:#1C1917;margin-bottom:8px">New Beta Application</h2>
+  <p style="color:#44403C;margin-bottom:20px">Someone just applied for Family COO beta access.</p>
+  <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+    <tr><td style="padding:8px 0;color:#78716C;font-size:13px">Name</td>
+        <td style="padding:8px 0;font-weight:500;color:#1C1917">{name}</td></tr>
+    <tr><td style="padding:8px 0;color:#78716C;font-size:13px">Email</td>
+        <td style="padding:8px 0;font-weight:500;color:#1C1917">{email}</td></tr>
+    <tr><td style="padding:8px 0;color:#78716C;font-size:13px">Queue position</td>
+        <td style="padding:8px 0;font-weight:500;color:#C2690A">#{position}</td></tr>
+  </table>
+  <a href="{admin_approve_url}"
+     style="display:inline-block;background:#C2690A;color:#fff;padding:14px 28px;
+            border-radius:100px;text-decoration:none;font-weight:600;font-size:14px">
+    ✓ Approve {name}
+  </a>
+  <p style="color:#A8A29E;font-size:12px;margin-top:16px">
+    Or go to your admin dashboard to manage all applicants.
+  </p>
+</div>"""
+    )
+
+    # Redirect browser to Vercel waiting page
+    redirect_url = (
+        f"{VERCEL_URL}/waiting.html"
+        f"?email={urllib.parse.quote(email)}"
+        f"&pos={position}"
+        f"&name={urllib.parse.quote(name)}"
+    )
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
+# ── 2. Status check — polled by waiting.html every 60s ───────────────────────
+
+@app.get("/api/waitlist/status")
+def waitlist_status(email: str, db: SupabaseClient = Depends(get_db)):
+    """Called by waiting.html to check if status changed to approved."""
+    try:
+        res = (
+            db.table("waitlist")
+            .select("status,position,access_token")
+            .eq("email", email)
+            .execute()
+        )
+        if not res.data:
+            raise HTTPException(404, "Not found")
+        row = res.data[0]
+        return {
+            "status":       row.get("status", "pending"),
+            "position":     row.get("position", 1),
+            "access_token": row.get("access_token") if row.get("status") == "approved" else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ── 3. Approve — called from admin dashboard or one-click email link ──────────
+
+@app.get("/api/waitlist/approve")
+@app.post("/api/waitlist/approve")
+def waitlist_approve(
+    email:     str,
+    admin_pin: str,
+    db: SupabaseClient = Depends(get_db),
+):
+    """
+    Approves a waitlist applicant.
+    - Sets status=approved in waitlist
+    - Seeds tester_usage so admin dashboard tracks them
+    - Sends approval email with deep link token
+    Supports both GET (one-click from email) and POST (from admin dashboard).
+    """
+    _verify_admin(admin_pin)
+    try:
+        res = db.table("waitlist").select("*").eq("email", email).execute()
+        if not res.data:
+            raise HTTPException(404, f"{email} not on waitlist")
+        row = res.data[0]
+
+        if row.get("status") == "approved":
+            return {"success": True, "message": "Already approved", "email": email}
+
+        # Mark approved and stamp timestamp
+        db.table("waitlist").update({
+            "status":      "approved",
+            "approved_at": datetime.utcnow().isoformat() + "Z",
+        }).eq("email", email).execute()
+
+        # Seed tester_usage so admin dashboard sees them
+        existing_usage = db.table("tester_usage").select("id").eq("email", email).execute()
+        if not existing_usage.data:
+            db.table("tester_usage").insert({
+                "email":         email,
+                "display_name":  row.get("name", email.split("@")[0]),
+                "request_count": 0,
+                "token_count":   0,
+                "request_limit": 50,
+                "is_paused":     False,
+                "last_pulse":    datetime.utcnow().isoformat() + "Z",
+            }).execute()
+
+        # Fetch the access_token (auto-generated uuid on insert)
+        updated = db.table("waitlist").select("access_token,name").eq("email", email).execute()
+        access_token = updated.data[0].get("access_token") if updated.data else ""
+        name         = updated.data[0].get("name", "there") if updated.data else "there"
+
+        # Build approval email
+        approve_link = f"{VERCEL_URL}/approved.html?token={access_token}"
+        _send_email(
+            to      = email,
+            subject = "You're approved — welcome to Family COO 🏠",
+            html_body = f"""
+<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px">
+  <h1 style="font-family:Georgia,serif;font-size:36px;font-weight:300;color:#1C1917;margin-bottom:12px">
+    Welcome, {name}!
+  </h1>
+  <p style="font-size:16px;color:#44403C;line-height:1.65;margin-bottom:28px">
+    Your Family COO beta application has been approved.
+    Tap the button below to access the app and complete your household profile.
+    It takes about 3 minutes.
+  </p>
+  <a href="{approve_link}"
+     style="display:inline-block;background:#C2690A;color:#fff;
+            padding:16px 36px;border-radius:100px;text-decoration:none;
+            font-weight:600;font-size:16px;letter-spacing:-.01em">
+    Access Family COO →
+  </a>
+  <p style="font-size:13px;color:#A8A29E;margin-top:24px;line-height:1.6">
+    This link is personal to you. It opens the app directly and takes you
+    straight to onboarding — no waiting room.
+    <br><br>
+    If the button doesn't work, copy this link into your browser:<br>
+    <span style="color:#C2690A;font-size:12px">{approve_link}</span>
+  </p>
+</div>"""
+        )
+
+        # If called via GET (one-click from email) redirect to a confirmation page
+        return {
+            "success":  True,
+            "email":    email,
+            "message":  f"Approved and email sent to {email}",
+            "token":    access_token,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ── 4. Validate — called by approved.html and the Expo app on launch ─────────
+
+@app.get("/api/waitlist/validate")
+def waitlist_validate(token: str, db: SupabaseClient = Depends(get_db)):
+    """
+    Validates an access token from the approval deep link.
+    Called by:
+      - approved.html  (shows "you're in" UI)
+      - Expo app       (on launch, to skip waiting room and go to onboarding)
+    Returns email and approved=True, or 403 if token is invalid/not approved.
+    """
+    try:
+        res = (
+            db.table("waitlist")
+            .select("email,name,status,access_token")
+            .eq("access_token", token)
+            .execute()
+        )
+        if not res.data:
+            raise HTTPException(403, "Invalid access token")
+        row = res.data[0]
+        if row.get("status") != "approved":
+            raise HTTPException(403, "Token exists but access not yet approved")
+        return {
+            "approved": True,
+            "email":    row.get("email"),
+            "name":     row.get("name"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))

@@ -2,7 +2,7 @@
 import { Tabs } from "expo-router";
 import { Platform, View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { C, R } from "../constants/config";
+import { C, R, USER_ID } from "../constants/config";
 
 type IName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -38,7 +38,11 @@ const TABS: Array<{name:string;title:string;icon:IName;iconOff:IName;hero?:boole
   {name:"calendar", title:"Calendar", icon:"calendar",         iconOff:"calendar-outline"},
   {name:"missions", title:"Missions", icon:"checkmark-circle", iconOff:"checkmark-circle-outline"},
   {name:"settings", title:"Engine",   icon:"cpu",              iconOff:"cpu-outline"},
+  {name:"admin",    title:"Admin",    icon:"shield",           iconOff:"shield-outline"},
 ];
+
+// Admin-only emails — tab bar button is hidden for all other users
+const ADMIN_EMAILS = ["tushar.khandare@gmail.com"];
 
 export default function TabsLayout() {
   const web = Platform.OS === "web";
@@ -54,6 +58,10 @@ export default function TabsLayout() {
       {TABS.map(({name,title,icon,iconOff,hero}) => (
         <Tabs.Screen key={name} name={name} options={{
           title,
+          // Hide admin tab from non-admin users — route still navigable via long-press
+          tabBarButton: name === "admin" && !ADMIN_EMAILS.includes(USER_ID)
+            ? () => null
+            : undefined,
           tabBarLabel: ({focused}) =>
             hero && !web
               ? <Text style={[st.heroLabel, focused && st.heroLabelActive]}>Chat</Text>
