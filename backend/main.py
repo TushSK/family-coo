@@ -1271,23 +1271,38 @@ def admin_pause(req: AdminPauseRequest, db: SupabaseClient = Depends(get_db)):
 # ── Email helper ──────────────────────────────────────────────────────────────
 
 def _send_email(to: str, subject: str, html_body: str) -> bool:
-    """Send HTML email via Gmail SMTP. Returns True on success."""
-    if not EMAIL_FROM or not EMAIL_PASS:
-        print(f"[email] skipped — EMAIL_FROM/EMAIL_PASS not set. Would send to: {to}")
+    """
+    Send HTML email via Resend API (HTTPS — works on Render free tier).
+    Render blocks outbound SMTP (port 465/587) on free plans, so Gmail
+    SMTP is not an option. Resend uses HTTPS which is never blocked.
+    Free tier: 3,000 emails/month, no credit card needed.
+    """
+    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+    if not RESEND_API_KEY:
+        print(f"[email] skipped — RESEND_API_KEY not set. Would send to: {to}")
         return False
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = EMAIL_FROM
-        msg["To"]      = to
-        msg.attach(MIMEText(html_body, "html"))
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as s:
-            s.login(EMAIL_FROM, EMAIL_PASS)
-            s.sendmail(EMAIL_FROM, to, msg.as_string())
-        print(f"[email] sent to {to}")
+        payload = json.dumps({
+            "from":    f"Family COO <onboarding@resend.dev>",
+            "to":      [to],
+            "subject": subject,
+            "html":    html_body,
+        }).encode()
+        req = _urlreq.Request(
+            "https://api.resend.com/emails",
+            data    = payload,
+            headers = {
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            method = "POST",
+        )
+        with _urlreq.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
+        print(f"[email] sent via Resend to {to} — id: {resp.get('id')}")
         return True
     except Exception as e:
-        print(f"[email] failed: {e}")
+        print(f"[email] Resend failed: {e}")
         return False
 
 
