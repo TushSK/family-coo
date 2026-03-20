@@ -12,8 +12,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "expo-router";
-import { C, R, S, USER_ID } from "../constants/config";  
-import { useAdminStats, Tester, TesterError } from "../hooks/useAdminStats";
+import { C, R, S, USER_ID } from "../constants/config";
+import { useAdminStats, Tester, TesterError, WaitlistApplicant } from "../hooks/useAdminStats";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -102,10 +102,12 @@ function ErrorBanner({ err }: { err: TesterError }) {
   );
 }
 
-function TesterCard({ tester, onBump, onPause, onDetail }: {
+function TesterCard({ tester, onBump, onPause, onRemove, onRevoke, onDetail }: {
   tester:   Tester;
   onBump:   () => void;
   onPause:  () => void;
+  onRemove: () => void;
+  onRevoke: () => void;
   onDetail: () => void;
 }) {
   const pct  = tester.usage_pct;
@@ -196,6 +198,7 @@ function TesterCard({ tester, onBump, onPause, onDetail }: {
       </View>
 
       {/* Actions */}
+      {/* Primary actions row */}
       <View style={st.actRow}>
         <TouchableOpacity style={[st.actBtn, st.actBump]} onPress={onBump}>
           <Ionicons name="add-circle-outline" size={13} color="#185fa5" />
@@ -219,6 +222,18 @@ function TesterCard({ tester, onBump, onPause, onDetail }: {
           <Text style={[st.actText, { color: C.ink2 }]}>Logs</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Danger actions row */}
+      <View style={[st.actRow, { marginTop: 6 }]}>
+        <TouchableOpacity style={[st.actBtn, st.actRemove]} onPress={onRemove}>
+          <Ionicons name="refresh-circle-outline" size={13} color={C.amber} />
+          <Text style={[st.actText, { color: C.amber }]}>Remove & Reset</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[st.actBtn, st.actRevoke]} onPress={onRevoke}>
+          <Ionicons name="ban-outline" size={13} color={C.red} />
+          <Text style={[st.actText, { color: C.red }]}>Revoke Access</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -235,13 +250,16 @@ export default function AdminScreen() {
     }
   }, []);
 
-  const { stats, loading, error, lastFetched, refetch, bumpLimit, setPaused }
+  const { stats, loading, error, lastFetched, refetch, bumpLimit, setPaused, approveApplicant, removeTester, revokeTester }
     = useAdminStats();
 
   const [filter, setFilter] = useState<"all" | "active" | "alerts">("all");
   const [pauseModal, setPauseModal] = useState<{ tester: Tester; action: "pause" | "unpause" } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [bumpConfirm, setBumpConfirm] = useState<string | null>(null); // email
+  const [bumpConfirm,    setBumpConfirm]    = useState<string | null>(null);
+  const [approveConfirm, setApproveConfirm] = useState<string | null>(null);
+  const [removeModal, setRemoveModal] = useState<{ tester: Tester; action: "remove" | "revoke" } | null>(null);
+  const [approvingEmail, setApprovingEmail] = useState<string | null>(null);
 
   // Refetch on focus
   useFocusEffect(useCallback(() => { refetch(); }, []));
@@ -269,6 +287,40 @@ export default function AdminScreen() {
     } catch {
       Alert.alert("Error", "Could not bump limit. Check your connection.");
     }
+  }
+
+  async function handleApprove(applicant: WaitlistApplicant) {
+    setApprovingEmail(applicant.email);
+    try {
+      await approveApplicant(applicant.email);
+      setApproveConfirm(applicant.email);
+      setTimeout(() => setApproveConfirm(null), 3000);
+    } catch {
+      Alert.alert("Error", "Could not approve applicant.");
+    }
+    setApprovingEmail(null);
+  }
+
+  function handleRemovePress(t: Tester) {
+    setRemoveModal({ tester: t, action: "remove" });
+  }
+
+  function handleRevokePress(t: Tester) {
+    setRemoveModal({ tester: t, action: "revoke" });
+  }
+
+  async function confirmRemoveOrRevoke() {
+    if (!removeModal) return;
+    try {
+      if (removeModal.action === "remove") {
+        await removeTester(removeModal.tester.email);
+      } else {
+        await revokeTester(removeModal.tester.email);
+      }
+    } catch {
+      Alert.alert("Error", "Could not complete action. Check your connection.");
+    }
+    setRemoveModal(null);
   }
 
   function handlePausePress(t: Tester) {
@@ -321,6 +373,63 @@ export default function AdminScreen() {
           </View>
         )}
 
+        {/* ── Pending Approvals ─────────────────────────────────────────── */}
+        {(stats?.pending_waitlist?.length ?? 0) > 0 && (
+          <View style={[st.approvalsSection, { marginBottom: 14 }]}>
+            <View style={st.approvalsHeader}>
+              <View style={st.approvalsBadge}>
+                <Text style={st.approvalsBadgeText}>
+                  {stats!.pending_waitlist.length} pending
+                </Text>
+              </View>
+              <Text style={st.sectionLabel}>WAITLIST — PENDING APPROVAL</Text>
+            </View>
+            {stats!.pending_waitlist.map(applicant => (
+              <View key={applicant.email} style={st.applicantCard}>
+                <View style={st.applicantLeft}>
+                  <View style={st.applicantAvatar}>
+                    <Text style={st.applicantAvatarText}>
+                      {(applicant.name || applicant.email)[0].toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={st.applicantName} numberOfLines={1}>
+                      {applicant.name || "Unknown"}
+                    </Text>
+                    <Text style={st.applicantEmail} numberOfLines={1}>
+                      {applicant.email}
+                    </Text>
+                    <Text style={st.applicantTime}>
+                      Applied {new Date(applicant.joined_at).toLocaleDateString("en-US", {
+                        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                      })} · #{applicant.position} in queue
+                    </Text>
+                  </View>
+                </View>
+                <View style={{ alignItems: "flex-end", gap: 6 }}>
+                  {approveConfirm === applicant.email ? (
+                    <View style={st.approvedBadge}>
+                      <Ionicons name="checkmark-circle" size={12} color={C.green} />
+                      <Text style={st.approvedBadgeText}>Approved!</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={[st.approveBtn, approvingEmail === applicant.email && { opacity: 0.6 }]}
+                      onPress={() => handleApprove(applicant)}
+                      disabled={approvingEmail === applicant.email}
+                    >
+                      {approvingEmail === applicant.email
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <Text style={st.approveBtnText}>✓ Approve</Text>
+                      }
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Health strip */}
         <View style={st.healthStrip}>
           <HealthCard
@@ -341,6 +450,12 @@ export default function AdminScreen() {
               : "All systems healthy"
             }
             alert={(totals?.alert_count ?? 0) > 0}
+          />
+          <HealthCard
+            label="AWAITING APPROVAL"
+            value={totals?.pending_approvals ?? "—"}
+            sub={(totals?.pending_approvals ?? 0) > 0 ? "scroll up to review" : "no pending apps"}
+            alert={(totals?.pending_approvals ?? 0) > 0}
           />
         </View>
 
@@ -377,6 +492,8 @@ export default function AdminScreen() {
               tester={t}
               onBump={() => handleBump(t)}
               onPause={() => handlePausePress(t)}
+              onRemove={() => handleRemovePress(t)}
+              onRevoke={() => handleRevokePress(t)}
               onDetail={() => router.push(`/(tabs)/admin?detail=${encodeURIComponent(t.email)}`)}
             />
             {bumpConfirm === t.email && (
@@ -427,6 +544,58 @@ export default function AdminScreen() {
           </View>
         </View>
       </Modal>
+      {/* Remove / Revoke confirmation modal */}
+      <Modal
+        visible={!!removeModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setRemoveModal(null)}
+      >
+        <View style={st.modalOverlay}>
+          <View style={st.modalSheet}>
+            <View style={st.sheetHandle} />
+
+            {removeModal?.action === "remove" ? (
+              <>
+                <Text style={st.modalTitle}>Remove & Reset?</Text>
+                <Text style={st.modalSub}>
+                  {"This removes "}
+                  <Text style={{fontWeight:"600"}}>{removeModal.tester.display_name}</Text>
+                  {" from the active roster and resets their waitlist status to pending.\n\nThey'll need to be re-approved before they can use the app again — useful for testing the full onboarding flow from scratch."}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={st.modalTitle}>Revoke Access?</Text>
+                <Text style={st.modalSub}>
+                  {"This permanently removes "}
+                  <Text style={{fontWeight:"600"}}>{removeModal?.tester.display_name}</Text>
+                  {" from both the tester roster and the waitlist.\n\nThey'll need to re-apply from the landing page to get access again. This cannot be undone without manual Supabase intervention."}
+                </Text>
+              </>
+            )}
+
+            <View style={st.modalActions}>
+              <TouchableOpacity style={st.modalCancel} onPress={() => setRemoveModal(null)}>
+                <Text style={st.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  st.modalConfirm,
+                  removeModal?.action === "revoke"
+                    ? { backgroundColor: C.red }
+                    : { backgroundColor: C.amber },
+                ]}
+                onPress={confirmRemoveOrRevoke}
+              >
+                <Text style={st.modalConfirmText}>
+                  {removeModal?.action === "remove" ? "Remove & Reset" : "Revoke Access"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -434,7 +603,24 @@ export default function AdminScreen() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const st = StyleSheet.create({
-  safe:        { flex: 1, backgroundColor: C.bg },
+  // ── Pending approvals ──────────────────────────────────────────────────────
+  approvalsSection: { },
+  approvalsHeader:  { flexDirection:"row", alignItems:"center", gap:8, marginBottom:8 },
+  approvalsBadge:   { backgroundColor:C.amberS, borderRadius:R.full, paddingHorizontal:10, paddingVertical:3, borderWidth:0.5, borderColor:C.amberB },
+  approvalsBadgeText:{ fontSize:10, fontWeight:"700", color:C.amber },
+  applicantCard:    { flexDirection:"row", alignItems:"center", justifyContent:"space-between", backgroundColor:C.bgCard, borderRadius:R.lg, borderWidth:0.5, borderColor:C.amberB, padding:12, marginBottom:8, gap:10 },
+  applicantLeft:    { flex:1, flexDirection:"row", alignItems:"center", gap:10, minWidth:0 },
+  applicantAvatar:  { width:38, height:38, borderRadius:19, backgroundColor:C.amberS, borderWidth:0.5, borderColor:C.amberB, alignItems:"center", justifyContent:"center", flexShrink:0 },
+  applicantAvatarText:{ fontSize:14, fontWeight:"700", color:C.amber },
+  applicantName:    { fontSize:14, fontWeight:"600", color:C.ink },
+  applicantEmail:   { fontSize:11, color:C.ink3, marginTop:1 },
+  applicantTime:    { fontSize:10, color:C.ink4, marginTop:2 },
+  approveBtn:       { backgroundColor:C.green, borderRadius:R.md, paddingHorizontal:16, paddingVertical:9, flexDirection:"row", alignItems:"center", gap:5 },
+  approveBtnText:   { fontSize:12, fontWeight:"700", color:"#fff" },
+  approvedBadge:    { flexDirection:"row", alignItems:"center", gap:5, backgroundColor:C.greenS, borderRadius:R.md, paddingHorizontal:10, paddingVertical:7, borderWidth:0.5, borderColor:C.greenB },
+  approvedBadgeText:{ fontSize:12, fontWeight:"600", color:C.green },
+
+    safe:        { flex: 1, backgroundColor: C.bg },
   header:      {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingVertical: 13,
@@ -558,6 +744,8 @@ const st = StyleSheet.create({
   actPause:    { backgroundColor: C.redS,   borderColor: C.redB   },
   actUnpause:  { backgroundColor: C.greenS, borderColor: C.greenB },
   actDetail:   { backgroundColor: C.bg2,    borderColor: C.border2 },
+  actRemove:   { backgroundColor: C.amberS, borderColor: C.amberB, flex: 1.5 },
+  actRevoke:   { backgroundColor: C.redS,   borderColor: C.redB,   flex: 1.5 },
 
   // Bump confirm
   bumpConfirm: { fontSize: 11, color: C.green, textAlign: "center", marginTop: -4, marginBottom: 10 },

@@ -1207,14 +1207,30 @@ def admin_stats(admin_pin: str, db: SupabaseClient = Depends(get_db)):
     total_requests = sum(t.get("request_count", 0) for t in testers)
     total_tokens   = sum(t.get("token_count",   0) for t in testers)
 
+    # Fetch pending waitlist applicants so admin can approve in-app
+    pending_waitlist = []
+    try:
+        wl_res = (
+            db.table("waitlist")
+            .select("email,name,position,joined_at,status")
+            .eq("status", "pending")
+            .order("position", desc=False)
+            .execute()
+        )
+        pending_waitlist = wl_res.data or []
+    except Exception:
+        pending_waitlist = []
+
     return {
         "testers": testers,
         "totals": {
-            "total_requests": total_requests,
-            "total_tokens":   total_tokens,
-            "active_today":   active_today,
-            "alert_count":    alert_count,
+            "total_requests":   total_requests,
+            "total_tokens":     total_tokens,
+            "active_today":     active_today,
+            "alert_count":      alert_count,
+            "pending_approvals": len(pending_waitlist),
         },
+        "pending_waitlist": pending_waitlist,
     }
 
 
@@ -1283,7 +1299,7 @@ def _send_email(to: str, subject: str, html_body: str) -> bool:
         return False
     try:
         payload = json.dumps({
-            "from":    f"Family COO <onboarding@resend.dev>",
+            "from":    "onboarding@resend.dev",
             "to":      [to],
             "subject": subject,
             "html":    html_body,
@@ -1577,6 +1593,56 @@ def waitlist_validate(token: str, db: SupabaseClient = Depends(get_db)):
             "email":    row.get("email"),
             "name":     row.get("name"),
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/admin/remove")
+def admin_remove(req: AdminBumpRequest, db: SupabaseClient = Depends(get_db)):
+    """
+    Removes a tester from tester_usage and resets their waitlist entry to
+    pending so they go back through the approval flow from scratch.
+    Used by admin to clean up test entries or reset a tester.
+    """
+    _verify_admin(req.admin_pin)
+    try:
+        # Remove from active tester roster
+        db.table("tester_usage").delete().eq("email", req.email).execute()
+
+        # Reset waitlist entry to pending so they can be re-approved
+        existing = db.table("waitlist").select("id").eq("email", req.email).execute()
+        if existing.data:
+            db.table("waitlist").update({
+                "status":      "pending",
+                "approved_at": None,
+            }).eq("email", req.email).execute()
+
+        return {"success": True, "email": req.email, "action": "removed"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/admin/revoke")
+def admin_revoke(req: AdminBumpRequest, db: SupabaseClient = Depends(get_db)):
+    """
+    Fully revokes a tester's access — removes from tester_usage AND
+    deletes their waitlist entry entirely. They would need to re-apply
+    from the landing page to get access again.
+    Used for permanent removal or if a tester is abusing the system.
+    """
+    _verify_admin(req.admin_pin)
+    try:
+        # Remove from active tester roster
+        db.table("tester_usage").delete().eq("email", req.email).execute()
+
+        # Delete waitlist entry entirely — forces full re-application
+        db.table("waitlist").delete().eq("email", req.email).execute()
+
+        return {"success": True, "email": req.email, "action": "revoked"}
     except HTTPException:
         raise
     except Exception as e:

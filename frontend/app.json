@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Family COO",
+    "slug": "family-coo",
+    "version": "1.0.0",
+    "scheme": "familycoo",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#FAF7FF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.familycoo.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FAF7FF"
+      },
+      "package": "com.familycoo.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "familycoo"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -34,16 +34,26 @@ export interface Tester {
   status:         "active" | "idle" | "error" | "paused";
 }
 
+export interface WaitlistApplicant {
+  email:     string;
+  name:      string;
+  position:  number;
+  joined_at: string;
+  status:    string;
+}
+
 export interface AdminTotals {
-  total_requests: number;
-  total_tokens:   number;
-  active_today:   number;
-  alert_count:    number;
+  total_requests:   number;
+  total_tokens:     number;
+  active_today:     number;
+  alert_count:      number;
+  pending_approvals: number;
 }
 
 export interface AdminStats {
-  testers: Tester[];
-  totals:  AdminTotals;
+  testers:          Tester[];
+  totals:           AdminTotals;
+  pending_waitlist: WaitlistApplicant[];
 }
 
 // ── Derived fields ─────────────────────────────────────────────────────────────
@@ -95,8 +105,9 @@ export function useAdminStats() {
       }
       const json = await res.json();
       const derived: AdminStats = {
-        testers: (json.testers || []).map(deriveFields),
-        totals:  json.totals  || { total_requests:0, total_tokens:0, active_today:0, alert_count:0 },
+        testers:          (json.testers || []).map(deriveFields),
+        totals:           json.totals  || { total_requests:0, total_tokens:0, active_today:0, alert_count:0, pending_approvals:0 },
+        pending_waitlist: json.pending_waitlist || [],
       };
       setStats(derived);
       setLastFetched(new Date());
@@ -134,6 +145,35 @@ export function useAdminStats() {
     await fetch_();
   }, [fetch_]);
 
+  const approveApplicant = useCallback(async (email: string): Promise<void> => {
+    await fetch(`${API_BASE}/api/waitlist/approve?email=${encodeURIComponent(email)}&admin_pin=${encodeURIComponent(APP_PIN)}`, {
+      method: "GET",
+    });
+    await fetch_();
+  }, [fetch_]);
+
+  const removeTester = useCallback(async (email: string): Promise<void> => {
+    // Removes from tester_usage + resets waitlist to pending
+    // Tester must be re-approved before they can use the app again
+    await fetch(`${API_BASE}/api/admin/remove`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ email, admin_pin: APP_PIN }),
+    });
+    await fetch_();
+  }, [fetch_]);
+
+  const revokeTester = useCallback(async (email: string): Promise<void> => {
+    // Full revoke — removes from tester_usage AND waitlist
+    // Tester must re-apply from the landing page to get access again
+    await fetch(`${API_BASE}/api/admin/revoke`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ email, admin_pin: APP_PIN }),
+    });
+    await fetch_();
+  }, [fetch_]);
+
   return {
     stats,
     loading,
@@ -142,5 +182,8 @@ export function useAdminStats() {
     refetch: fetch_,
     bumpLimit,
     setPaused,
+    approveApplicant,
+    removeTester,
+    revokeTester,
   };
 }
