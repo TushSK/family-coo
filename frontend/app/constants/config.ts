@@ -8,14 +8,7 @@ export const API_BASE: string =
     ? process.env.EXPO_PUBLIC_API_BASE
     : RENDER_URL;
 
-// USER_ID is now dynamic — set at login time via setActiveUser()
-// Falls back to the owner email for local dev / admin use
-let _activeUserId = "tushar.khandare@gmail.com";
-export const getActiveUser  = () => _activeUserId;
-export const setActiveUser  = (email: string) => { _activeUserId = email; };
-// Keep USER_ID export for backwards compat with existing screens
-// All screens that import USER_ID will get the current value via the getter
-export const USER_ID = "tushar.khandare@gmail.com"; // owner fallback only
+export const USER_ID = "tushar.khandare@gmail.com"; // owner fallback only — use getActiveUser() for dynamic email
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 export const C = {
@@ -84,6 +77,13 @@ export const STORAGE_KEYS = {
   pinVerified:  "fcoo_pin_verified",
   onboardDone:  "fcoo_onboard_done",
   userEmail:    "fcoo_user_email",
+  userPin:      "fcoo_user_pin",      // each user sets their own PIN
+  pinSkipped:   "fcoo_pin_skipped",   // true if user chose to skip PIN setup
 };
 
-export const APP_PIN = "4240"; // loaded from secrets in production
+export const APP_PIN = "4240"; // owner-only fallback
+
+// Dynamic user ID — set at login, read by all screens
+let _activeUserId = "tushar.khandare@gmail.com";
+export const getActiveUser = () => _activeUserId;
+export const setActiveUser = (email: string) => { _activeUserId = email; };

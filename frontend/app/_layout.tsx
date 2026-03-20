@@ -30,7 +30,7 @@ function AuthGate() {
     if (auth === "pin"     && inAuth) return;
     if (auth === "onboard" && inAuth) return;
 
-    if (auth === "login")   router.replace("/(auth)/login");
+    if (auth === "pin" || auth === "pin_setup") router.replace("/(auth)/pin");
     if (auth === "pin")     router.replace("/(auth)/pin");
     if (auth === "onboard") router.replace("/(auth)/onboard");
     if (auth === "app")     router.replace("/(tabs)");
