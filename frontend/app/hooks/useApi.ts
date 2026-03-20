@@ -1,6 +1,6 @@
 // hooks/useApi.ts
 import { useState, useCallback } from "react";
-import { API_BASE, USER_ID } from "../constants/config";
+import { API_BASE, getActiveUser } from "../constants/config";
 
 type ApiState<T> = {
   data: T | null;
@@ -19,7 +19,7 @@ export function useGet<T>(path: string): ApiState<T> {
     setError(null);
     try {
       const sep = path.includes("?") ? "&" : "?";
-      const url = `${API_BASE}${path}${sep}user_id=${encodeURIComponent(USER_ID)}`;
+      const url = `${API_BASE}${path}${sep}user_id=${encodeURIComponent(getActiveUser())}`;
       const res = await fetch(url, { headers: { "Accept": "application/json" } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
